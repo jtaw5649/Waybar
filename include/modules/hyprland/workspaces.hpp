@@ -37,6 +37,9 @@ class Workspaces : public AModule, public EventHandler {
 
   auto allOutputs() const -> bool { return m_allOutputs; }
   auto showSpecial() const -> bool { return m_showSpecial; }
+  auto showSpecialWorkspaceEntries() const -> bool {
+    return m_showSpecial && !m_hyprspacesSpecialOverlay;
+  }
   auto activeOnly() const -> bool { return m_activeOnly; }
   auto specialVisibleOnly() const -> bool { return m_specialVisibleOnly; }
   auto persistentOnly() const -> bool { return m_persistentOnly; }
@@ -141,6 +144,7 @@ class Workspaces : public AModule, public EventHandler {
 
   bool m_allOutputs = false;
   bool m_showSpecial = false;
+  bool m_hyprspacesSpecialOverlay = false;
   bool m_activeOnly = false;
   bool m_activePerMonitor = true;
   int m_hyprspacesPairedOffset = 0;

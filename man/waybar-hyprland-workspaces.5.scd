@@ -131,6 +131,13 @@ This setting is ignored if *workspace-taskbar.enable* is set to true.
 	For example, with offset 10, workspace 11 is rendered as slot 1.
 	When enabled, empty/occupied state is also normalized across paired workspaces.
 
+*hyprspaces-special-overlay*: ++
+	typeof: bool ++
+	default: false ++
+	If set to true, special workspaces are represented as state on the monitor's active non-special workspace.
+	Dedicated special workspace buttons are hidden even if *show-special* is enabled.
+	Use this to keep numbered workspace rows stable while still exposing special workspace state.
+
 *active-only*: ++
 	typeof: bool ++
 	default: false ++
@@ -176,6 +183,7 @@ Additional to workspace name matching, the following *format-icons* can be set.
 
 - *default*: Will be shown, when no string match is found and none of the below conditions have defined icons.
 - *active*: Will be shown, when workspace is active
+- *special-active*: Will be shown when a special workspace is active on the monitor and *hyprspaces-special-overlay* is enabled
 - *special*: Will be shown on non-active special workspaces
 - *empty*: Will be shown on non-active, non-special empty persistent workspaces
 - *visible*: Will be shown on workspaces that are visible but not active. For example: this is useful if you want your visible workspaces on other monitors to have the same look as active.
@@ -253,6 +261,7 @@ Additional to workspace name matching, the following *format-icons* can be set.
 - *#workspaces button.active*
 - *#workspaces button.empty*
 - *#workspaces button.visible*
+- *#workspaces button.special-active*
 - *#workspaces button.persistent*
 - *#workspaces button.special*
 - *#workspaces button.urgent*

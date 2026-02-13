@@ -161,6 +161,13 @@ std::string& Workspace::selectIcon(std::map<std::string, std::string>& icons_map
     }
   }
 
+  if (isSpecialActive()) {
+    auto specialActiveIconIt = icons_map.find("special-active");
+    if (specialActiveIconIt != icons_map.end()) {
+      return specialActiveIconIt->second;
+    }
+  }
+
   if (isActive()) {
     auto activeIconIt = icons_map.find("active");
     if (activeIconIt != icons_map.end()) {
@@ -238,6 +245,7 @@ void Workspace::update(const std::string& workspace_icon) {
   addOrRemoveClass(styleContext, isPersistent(), "persistent");
   addOrRemoveClass(styleContext, isUrgent(), "urgent");
   addOrRemoveClass(styleContext, isVisible(), "visible");
+  addOrRemoveClass(styleContext, isSpecialActive(), "special-active");
   addOrRemoveClass(styleContext, m_workspaceManager.getBarOutput() == output(), "hosting-monitor");
 
   std::string windows;

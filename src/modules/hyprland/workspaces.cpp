@@ -193,7 +193,7 @@ void Workspaces::initializeWorkspaces() {
   for (Json::Value workspaceJson : workspacesJson) {
     std::string workspaceName = workspaceJson["name"].asString();
     if ((allOutputs() || m_bar.output->name == workspaceJson["monitor"].asString()) &&
-        (!workspaceName.starts_with("special") || showSpecial()) &&
+        (!workspaceName.starts_with("special") || showSpecialWorkspaceEntries()) &&
         !isWorkspaceIgnored(workspaceName)) {
       m_workspacesToCreate.emplace_back(workspaceJson, clientsJson);
     } else {
@@ -302,7 +302,7 @@ void Workspaces::loadPersistentWorkspacesFromWorkspaceRules(const Json::Value& c
                                                   : rule["workspaceString"].asString();
 
     // There could be persistent special workspaces, only show those when show-special is enabled.
-    if (workspace.starts_with("special:") && !showSpecial()) {
+    if (workspace.starts_with("special:") && !showSpecialWorkspaceEntries()) {
       continue;
     }
 
@@ -410,7 +410,7 @@ void Workspaces::onWorkspaceCreated(std::string const& payload, Json::Value cons
       }
 
       if ((allOutputs() || m_bar.output->name == workspaceJson["monitor"].asString()) &&
-          (showSpecial() || !workspaceName.starts_with("special")) &&
+          (showSpecialWorkspaceEntries() || !workspaceName.starts_with("special")) &&
           !isDoubleSpecial(workspaceName)) {
         for (Json::Value const& rule : workspaceRules) {
           auto ruleWorkspaceName = rule.isMember("defaultName")
@@ -638,6 +638,7 @@ auto Workspaces::parseConfig(const Json::Value& config) -> void {
   populateBoolConfig(config, "all-outputs", m_allOutputs);
   populateBoolConfig(config, "show-special", m_showSpecial);
   populateBoolConfig(config, "active-per-monitor", m_activePerMonitor);
+  populateBoolConfig(config, "hyprspaces-special-overlay", m_hyprspacesSpecialOverlay);
 
   const auto &hyprspacesPairedOffset = config["hyprspaces-paired-offset"];
   if (hyprspacesPairedOffset.isInt()) {
@@ -1108,6 +1109,8 @@ void Workspaces::updateWorkspaceStates() {
     }
   }
 
+  const bool monitorHasSpecialWorkspace = !activeSpecialWorkspaceName.empty();
+
   const bool hyprspacesPairingEnabled = m_hyprspacesPairedOffset > 0;
   auto normalizeHyprspacesWorkspaceId = [this](int workspaceId) {
     if (workspaceId <= 0 || m_hyprspacesPairedOffset <= 0) {
@@ -1137,9 +1140,16 @@ void Workspaces::updateWorkspaceStates() {
     bool isActiveByName =
         !activeWorkspaceName.empty() && workspace->name() == activeWorkspaceName;
 
-    workspace->setActive(
-        workspace->id() == activeWorkspaceId || isActiveByName ||
-        (workspace->isSpecial() && workspace->name() == activeSpecialWorkspaceName));
+    const bool isSpecialWorkspaceActive =
+        workspace->isSpecial() && workspace->name() == activeSpecialWorkspaceName;
+    const bool isWorkspaceActive =
+        workspace->id() == activeWorkspaceId || isActiveByName || isSpecialWorkspaceActive;
+
+    workspace->setActive(isWorkspaceActive);
+    workspace->setSpecialActive(
+        m_hyprspacesSpecialOverlay && monitorHasSpecialWorkspace && !workspace->isSpecial() &&
+        (workspace->id() == activeWorkspaceId || isActiveByName));
+
     if (workspace->isActive() && workspace->isUrgent()) {
       workspace->setUrgent(false);
     }

@@ -41,6 +41,7 @@ class Workspace {
   std::string output() const { return m_output; };
   bool isActive() const { return m_isActive; };
   bool isSpecial() const { return m_isSpecial; };
+  bool isSpecialActive() const { return m_isSpecialActive; };
   bool isPersistent() const { return m_isPersistentRule || m_isPersistentConfig; };
   bool isPersistentConfig() const { return m_isPersistentConfig; };
   bool isPersistentRule() const { return m_isPersistentRule; };
@@ -53,6 +54,7 @@ class Workspace {
   void setPersistentConfig(bool value = true) { m_isPersistentConfig = value; };
   void setUrgent(bool value = true) { m_isUrgent = value; };
   void setVisible(bool value = true) { m_isVisible = value; };
+  void setSpecialActive(bool value = true) { m_isSpecialActive = value; };
   void setWindows(uint value) { m_windows = value; };
   void setName(std::string const& value) { m_name = value; };
   void setDisplayIdOverride(std::optional<int> value) { m_displayIdOverride = value; };
@@ -87,6 +89,7 @@ class Workspace {
   bool m_isPersistentConfig = false;  // represents the persistent state in the Waybar config
   bool m_isUrgent = false;
   bool m_isVisible = false;
+  bool m_isSpecialActive = false;
   std::optional<int> m_displayIdOverride;
   std::optional<std::string> m_displayNameOverride;
   std::optional<bool> m_emptyOverride;
