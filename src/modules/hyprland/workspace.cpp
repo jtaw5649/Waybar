@@ -175,7 +175,7 @@ std::string& Workspace::selectIcon(std::map<std::string, std::string>& icons_map
     }
   }
 
-  auto namedIconIt = icons_map.find(name());
+  auto namedIconIt = icons_map.find(displayName());
   if (namedIconIt != icons_map.end()) {
     return namedIconIt->second;
   }
@@ -258,9 +258,12 @@ void Workspace::update(const std::string& workspace_icon) {
   }
 
   auto formatBefore = m_workspaceManager.formatBefore();
-  m_labelBefore.set_markup(fmt::format(fmt::runtime(formatBefore), fmt::arg("id", id()),
-                                       fmt::arg("name", name()), fmt::arg("icon", workspace_icon),
-                                       fmt::arg("windows", windows)));
+  auto renderedId = displayId();
+  auto renderedName = displayName();
+  m_labelBefore.set_markup(
+      fmt::format(fmt::runtime(formatBefore), fmt::arg("id", renderedId),
+                  fmt::arg("name", renderedName), fmt::arg("icon", workspace_icon),
+                  fmt::arg("windows", windows)));
   m_labelBefore.get_style_context()->add_class("workspace-label");
 
   if (m_workspaceManager.enableTaskbar()) {
@@ -269,6 +272,10 @@ void Workspace::update(const std::string& workspace_icon) {
 }
 
 bool Workspace::isEmpty() const {
+  if (m_emptyOverride.has_value()) {
+    return m_emptyOverride.value();
+  }
+
   auto ignore_list = m_workspaceManager.getIgnoredWindows();
   if (ignore_list.empty()) {
     return m_windows == 0;
@@ -350,8 +357,10 @@ void Workspace::updateTaskbar(const std::string& workspace_icon) {
 
   auto formatAfter = m_workspaceManager.formatAfter();
   if (!formatAfter.empty()) {
-    m_labelAfter.set_markup(fmt::format(fmt::runtime(formatAfter), fmt::arg("id", id()),
-                                        fmt::arg("name", name()),
+    auto renderedId = displayId();
+    auto renderedName = displayName();
+    m_labelAfter.set_markup(fmt::format(fmt::runtime(formatAfter), fmt::arg("id", renderedId),
+                                        fmt::arg("name", renderedName),
                                         fmt::arg("icon", workspace_icon)));
     m_content.pack_end(m_labelAfter, false, false);
     m_labelAfter.show();
