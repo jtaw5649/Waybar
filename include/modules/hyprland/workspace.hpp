@@ -11,6 +11,7 @@
 #include <optional>
 #include <regex>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -34,7 +35,9 @@ class Workspace {
   Gtk::Button& button() { return m_button; };
 
   int id() const { return m_id; };
+  int displayId() const { return m_displayIdOverride.value_or(m_id); };
   std::string name() const { return m_name; };
+  std::string displayName() const { return m_displayNameOverride.value_or(m_name); };
   std::string output() const { return m_output; };
   bool isActive() const { return m_isActive; };
   bool isSpecial() const { return m_isSpecial; };
@@ -52,6 +55,11 @@ class Workspace {
   void setVisible(bool value = true) { m_isVisible = value; };
   void setWindows(uint value) { m_windows = value; };
   void setName(std::string const& value) { m_name = value; };
+  void setDisplayIdOverride(std::optional<int> value) { m_displayIdOverride = value; };
+  void setDisplayNameOverride(std::optional<std::string> value) {
+    m_displayNameOverride = std::move(value);
+  };
+  void setEmptyOverride(std::optional<bool> value) { m_emptyOverride = value; };
   void setOutput(std::string const& value) { m_output = value; };
   bool containsWindow(WindowAddress const& addr) const {
     return std::ranges::any_of(m_windowMap,
@@ -79,6 +87,9 @@ class Workspace {
   bool m_isPersistentConfig = false;  // represents the persistent state in the Waybar config
   bool m_isUrgent = false;
   bool m_isVisible = false;
+  std::optional<int> m_displayIdOverride;
+  std::optional<std::string> m_displayNameOverride;
+  std::optional<bool> m_emptyOverride;
 
   std::vector<WindowRepr> m_windowMap;
 

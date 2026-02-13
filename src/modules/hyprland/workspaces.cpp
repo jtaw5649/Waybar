@@ -7,6 +7,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 #include "util/regex_collection.hpp"
@@ -249,7 +250,11 @@ void Workspaces::loadPersistentWorkspacesFromConfig(Json::Value const &clientsJs
         int amount = value.asInt();
         spdlog::debug("Creating {} persistent workspaces for monitor {}", amount, currentMonitor);
         for (int i = 0; i < amount; i++) {
-          persistentWorkspacesToCreate.emplace_back(std::to_string((m_monitorId * amount) + i + 1));
+          int base = static_cast<int>(m_monitorId) * amount;
+          if (m_hyprspacesPairedOffset > 0) {
+            base = static_cast<int>(m_monitorId) * m_hyprspacesPairedOffset;
+          }
+          persistentWorkspacesToCreate.emplace_back(std::to_string(base + i + 1));
         }
       }
     } else if (value.isArray() && !value.empty()) {
@@ -330,7 +335,7 @@ void Workspaces::onEvent(const std::string &ev) {
     onWorkspaceDestroyed(payload);
   } else if (eventName == "createworkspacev2") {
     onWorkspaceCreated(payload);
-  } else if (eventName == "focusedmonv2") {
+  } else if (eventName == "focusedmonv2" || eventName == "focusedmon") {
     onMonitorFocused(payload);
   } else if (eventName == "moveworkspacev2") {
     onWorkspaceMoved(payload);
@@ -627,6 +632,13 @@ auto Workspaces::parseConfig(const Json::Value &config) -> void {
 
   populateBoolConfig(config, "all-outputs", m_allOutputs);
   populateBoolConfig(config, "show-special", m_showSpecial);
+  populateBoolConfig(config, "active-per-monitor", m_activePerMonitor);
+
+  const auto &hyprspacesPairedOffset = config["hyprspaces-paired-offset"];
+  if (hyprspacesPairedOffset.isInt()) {
+    m_hyprspacesPairedOffset = std::max(0, hyprspacesPairedOffset.asInt());
+  }
+
   populateBoolConfig(config, "special-visible-only", m_specialVisibleOnly);
   populateBoolConfig(config, "persistent-only", m_persistentOnly);
   populateBoolConfig(config, "active-only", m_activeOnly);
@@ -801,6 +813,7 @@ auto Workspaces::registerIpc() -> void {
   m_ipc.registerForIPC("createworkspacev2", this);
   m_ipc.registerForIPC("destroyworkspacev2", this);
   m_ipc.registerForIPC("focusedmonv2", this);
+  m_ipc.registerForIPC("focusedmon", this);
   m_ipc.registerForIPC("moveworkspacev2", this);
   m_ipc.registerForIPC("renameworkspace", this);
   m_ipc.registerForIPC("openwindow", this);
@@ -1060,16 +1073,68 @@ void Workspaces::updateWorkspaceStates() {
   auto updatedWorkspaces = m_ipc.getSocket1JsonReply("workspaces");
 
   auto currentWorkspace = m_ipc.getSocket1JsonReply("activeworkspace");
-  std::string currentWorkspaceName =
+  int activeWorkspaceId = m_activeWorkspaceId;
+  std::string activeWorkspaceName =
       currentWorkspace.isMember("name") ? currentWorkspace["name"].asString() : "";
+  std::string activeSpecialWorkspaceName = m_activeSpecialWorkspaceName;
+
+  if (m_activePerMonitor) {
+    auto monitors = m_ipc.getSocket1JsonReply("monitors");
+    auto monitor = std::ranges::find_if(monitors, [this](const Json::Value &m) {
+      return m["name"].asString() == m_bar.output->name;
+    });
+
+    if (monitor != monitors.end()) {
+      const auto monitorActiveWorkspace = (*monitor)["activeWorkspace"];
+      if (monitorActiveWorkspace.isObject() && monitorActiveWorkspace["id"].isInt()) {
+        activeWorkspaceId = monitorActiveWorkspace["id"].asInt();
+      }
+      if (monitorActiveWorkspace.isObject() && monitorActiveWorkspace["name"].isString()) {
+        activeWorkspaceName = monitorActiveWorkspace["name"].asString();
+      }
+
+      const auto monitorSpecialWorkspace = (*monitor)["specialWorkspace"];
+      if (monitorSpecialWorkspace.isObject() && monitorSpecialWorkspace["name"].isString()) {
+        auto specialName = monitorSpecialWorkspace["name"].asString();
+        activeSpecialWorkspaceName = specialName.starts_with("special:")
+                                         ? specialName.substr(8)
+                                         : specialName;
+      }
+    }
+  }
+
+  const bool hyprspacesPairingEnabled = m_hyprspacesPairedOffset > 0;
+  auto normalizeHyprspacesWorkspaceId = [this](int workspaceId) {
+    if (workspaceId <= 0 || m_hyprspacesPairedOffset <= 0) {
+      return workspaceId;
+    }
+    return ((workspaceId - 1) % m_hyprspacesPairedOffset) + 1;
+  };
+
+  std::unordered_set<int> hyprspacesOccupied;
+  if (hyprspacesPairingEnabled) {
+    for (const auto &workspace : updatedWorkspaces) {
+      if (!workspace["id"].isInt() || !workspace["windows"].isInt()) {
+        continue;
+      }
+
+      const int workspaceId = workspace["id"].asInt();
+      const int windows = workspace["windows"].asInt();
+      if (workspaceId <= 0 || windows <= 0) {
+        continue;
+      }
+
+      hyprspacesOccupied.insert(normalizeHyprspacesWorkspaceId(workspaceId));
+    }
+  }
 
   for (auto &workspace : m_workspaces) {
     bool isActiveByName =
-        !currentWorkspaceName.empty() && workspace->name() == currentWorkspaceName;
+        !activeWorkspaceName.empty() && workspace->name() == activeWorkspaceName;
 
     workspace->setActive(
-        workspace->id() == m_activeWorkspaceId || isActiveByName ||
-        (workspace->isSpecial() && workspace->name() == m_activeSpecialWorkspaceName));
+        workspace->id() == activeWorkspaceId || isActiveByName ||
+        (workspace->isSpecial() && workspace->name() == activeSpecialWorkspaceName));
     if (workspace->isActive() && workspace->isUrgent()) {
       workspace->setUrgent(false);
     }
@@ -1087,6 +1152,18 @@ void Workspaces::updateWorkspaceStates() {
     if (updatedWorkspace != updatedWorkspaces.end()) {
       workspace->setOutput((*updatedWorkspace)["monitor"].asString());
     }
+
+    if (hyprspacesPairingEnabled && workspace->id() > 0) {
+      const int normalizedId = normalizeHyprspacesWorkspaceId(workspace->id());
+      workspace->setDisplayIdOverride(normalizedId);
+      workspace->setDisplayNameOverride(std::to_string(normalizedId));
+      workspace->setEmptyOverride(hyprspacesOccupied.find(normalizedId) == hyprspacesOccupied.end());
+    } else {
+      workspace->setDisplayIdOverride(std::nullopt);
+      workspace->setDisplayNameOverride(std::nullopt);
+      workspace->setEmptyOverride(std::nullopt);
+    }
+
     workspace->update(workspaceIcon);
   }
 }

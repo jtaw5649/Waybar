@@ -118,6 +118,19 @@ This setting is ignored if *workspace-taskbar.enable* is set to true.
 	default: false ++
 	If set to false workspaces group will be shown only in assigned output. Otherwise, all workspace groups are shown.
 
+*active-per-monitor*: ++
+	typeof: bool ++
+	default: true ++
+	If set to true, active workspace state is derived from the bar's output monitor instead of global active workspace.
+	This lets multi-monitor bars highlight the active workspace on each monitor at the same time.
+
+*hyprspaces-paired-offset*: ++
+	typeof: int ++
+	default: 0 (disabled) ++
+	If set to a value greater than 0, workspace labels are normalized with modulo arithmetic using this offset.
+	For example, with offset 10, workspace 11 is rendered as slot 1.
+	When enabled, empty/occupied state is also normalized across paired workspaces.
+
 *active-only*: ++
 	typeof: bool ++
 	default: false ++
