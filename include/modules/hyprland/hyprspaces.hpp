@@ -50,7 +50,7 @@ inline std::optional<int> getHyprspacesDisplaySlotForOffset(int workspaceId, int
   return ((workspaceId - 1) % pairedOffset) + 1;
 }
 
-inline std::optional<std::string> makeHyprspacesWorkspaceKeyForOffset(
+inline std::optional<std::string> makeHyprspacesCanonicalSlotKeyForOffset(
     int workspaceId, std::string_view output, int pairedOffset) {
   const auto displaySlot = getHyprspacesDisplaySlotForOffset(workspaceId, pairedOffset);
   if (!displaySlot.has_value()) {
@@ -70,6 +70,58 @@ struct HyprspacesQueuedWorkspace {
   bool displayable = true;
 };
 
+struct HyprspacesVisibleWorkspace {
+  int id = 0;
+  std::string output;
+};
+
+struct HyprspacesStateIndex {
+  std::unordered_set<int> visibleRawIds;
+  std::unordered_set<int> occupiedRawIds;
+  std::unordered_set<std::string> visibleCanonicalSlotKeys;
+  std::unordered_set<std::string> occupiedCanonicalSlotKeys;
+};
+
+struct HyprspacesWorkspaceView {
+  int id = 0;
+  std::string name;
+  std::string output;
+  bool special = false;
+  bool explicitAliasPlaceholder = false;
+  bool useCanonicalSlotForState = false;
+};
+
+struct HyprspacesActiveContext {
+  int workspaceId = 0;
+  std::string workspaceName;
+  std::string workspaceOutput;
+  std::string specialWorkspaceName;
+  bool monitorHasSpecialWorkspace = false;
+  bool specialOverlay = false;
+};
+
+struct HyprspacesWorkspaceRenderState {
+  bool active = false;
+  bool specialActive = false;
+  bool visible = false;
+  std::optional<int> displaySlot;
+  std::optional<std::string> displayLabel;
+  std::optional<bool> empty;
+};
+
+struct HyprspacesPersistentAliasMetadata {
+  int id = 0;
+  std::string name;
+  std::string output;
+  bool persistentConfig = false;
+  bool persistentRule = false;
+};
+
+inline HyprspacesPersistentAliasMetadata makeHyprspacesPersistentAliasMetadata(
+    int id, std::string name, std::string output, bool persistentConfig, bool persistentRule) {
+  return {id, std::move(name), std::move(output), persistentConfig, persistentRule};
+}
+
 struct HyprspacesCoalescedCreate {
   size_t queuedIndex = 0;
   HyprspacesQueuedWorkspace workspace;
@@ -84,10 +136,10 @@ struct HyprspacesCoalescedEvents {
 inline std::optional<std::string> getHyprspacesCreateQueueKey(
     HyprspacesQueuedWorkspace const& workspace, int pairedOffset) {
   if (workspace.aliasPlaceholder) {
-    const auto workspaceKey = makeHyprspacesWorkspaceKeyForOffset(
+    const auto canonicalSlotKey = makeHyprspacesCanonicalSlotKeyForOffset(
         workspace.id, workspace.output, pairedOffset);
-    if (workspaceKey.has_value()) {
-      return "alias:" + *workspaceKey;
+    if (canonicalSlotKey.has_value()) {
+      return "alias:" + *canonicalSlotKey;
     }
   }
 
@@ -168,8 +220,89 @@ inline HyprspacesCoalescedEvents coalesceHyprspacesWorkspaceEvents(
   return result;
 }
 
+inline HyprspacesStateIndex buildHyprspacesStateIndex(
+    std::vector<HyprspacesQueuedWorkspace> const& workspaceSnapshot,
+    std::vector<HyprspacesVisibleWorkspace> const& visibleWorkspaces,
+    std::vector<int> const& visibleRawIds, int pairedOffset) {
+  HyprspacesStateIndex index;
+  index.visibleRawIds.insert(visibleRawIds.begin(), visibleRawIds.end());
+
+  for (const auto& workspace : workspaceSnapshot) {
+    if (workspace.id <= 0 || workspace.windows <= 0) {
+      continue;
+    }
+
+    index.occupiedRawIds.insert(workspace.id);
+    auto key = makeHyprspacesCanonicalSlotKeyForOffset(
+        workspace.id, workspace.output, pairedOffset);
+    if (key.has_value()) {
+      index.occupiedCanonicalSlotKeys.insert(*key);
+    }
+  }
+
+  for (const auto& workspace : visibleWorkspaces) {
+    auto key = makeHyprspacesCanonicalSlotKeyForOffset(
+        workspace.id, workspace.output, pairedOffset);
+    if (key.has_value()) {
+      index.visibleCanonicalSlotKeys.insert(*key);
+    }
+  }
+
+  return index;
+}
+
+inline HyprspacesWorkspaceRenderState classifyHyprspacesWorkspaceState(
+    HyprspacesWorkspaceView const& workspace, HyprspacesActiveContext const& active,
+    HyprspacesStateIndex const& index, int pairedOffset) {
+  HyprspacesWorkspaceRenderState state;
+  const auto canonicalSlotKey = makeHyprspacesCanonicalSlotKeyForOffset(
+      workspace.id, workspace.output, pairedOffset);
+  const bool isPlaceholder = canonicalSlotKey.has_value() && workspace.explicitAliasPlaceholder;
+  const auto activeCanonicalSlotKey = makeHyprspacesCanonicalSlotKeyForOffset(
+      active.workspaceId, active.workspaceOutput, pairedOffset);
+
+  const bool activeByCanonicalSlot = workspace.useCanonicalSlotForState &&
+                                     activeCanonicalSlotKey.has_value() &&
+                                     canonicalSlotKey == activeCanonicalSlotKey;
+  const bool activeByName = !workspace.useCanonicalSlotForState && !isPlaceholder &&
+                            !active.workspaceName.empty() &&
+                            workspace.name == active.workspaceName;
+  const bool specialActive = !workspace.useCanonicalSlotForState && !isPlaceholder &&
+                             workspace.special &&
+                             workspace.name == active.specialWorkspaceName;
+  const bool activeByRawId = !isPlaceholder && workspace.id == active.workspaceId;
+
+  state.active = workspace.useCanonicalSlotForState
+                     ? activeByCanonicalSlot
+                     : activeByRawId || activeByName || specialActive;
+  const bool specialOverlayActive = workspace.useCanonicalSlotForState
+                                        ? activeByCanonicalSlot
+                                        : activeByRawId || activeByName;
+  state.specialActive = active.specialOverlay && active.monitorHasSpecialWorkspace &&
+                        !workspace.special && specialOverlayActive;
+  state.visible = !isPlaceholder &&
+                  (workspace.useCanonicalSlotForState
+                       ? canonicalSlotKey.has_value() &&
+                             index.visibleCanonicalSlotKeys.contains(*canonicalSlotKey)
+                       : index.visibleRawIds.contains(workspace.id));
+
+  if (pairedOffset > 0 && workspace.id > 0) {
+    state.displaySlot = getHyprspacesDisplaySlotForOffset(workspace.id, pairedOffset);
+    if (state.displaySlot.has_value()) {
+      state.displayLabel = std::to_string(*state.displaySlot);
+    }
+    state.empty = isPlaceholder ||
+                  (workspace.useCanonicalSlotForState
+                       ? !canonicalSlotKey.has_value() ||
+                             !index.occupiedCanonicalSlotKeys.contains(*canonicalSlotKey)
+                       : !index.occupiedRawIds.contains(workspace.id));
+  }
+
+  return state;
+}
+
 inline int getHyprspacesPersistentWorkspaceId(int monitorId, int amount, int pairedOffset,
-                                              int index) {
+                                               int index) {
   int base = monitorId * amount;
   if (pairedOffset > 0) {
     base = monitorId * pairedOffset;

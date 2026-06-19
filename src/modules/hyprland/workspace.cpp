@@ -21,7 +21,7 @@ Workspace::Workspace(const Json::Value& workspace_data, Workspaces& workspace_ma
       m_isPersistentRule(workspace_data["persistent-rule"].asBool()),
       m_isPersistentConfig(workspace_data["persistent-config"].asBool()),
       m_isHyprspacesPersistentAliasPlaceholder(
-          workspace_data[HYPRSPACES_PERSISTENT_ALIAS_PLACEHOLDER_KEY].asBool()),
+          workspace_data[HYPRSPACES_EXPLICIT_ALIAS_PLACEHOLDER_KEY].asBool()),
       m_ipc(IPC::inst()) {
   if (m_name.starts_with("name:")) {
     m_name = m_name.substr(5);

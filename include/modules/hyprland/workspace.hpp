@@ -26,7 +26,7 @@ using WindowAddress = std::string;
 
 namespace waybar::modules::hyprland {
 
-inline constexpr char HYPRSPACES_PERSISTENT_ALIAS_PLACEHOLDER_KEY[] =
+inline constexpr char HYPRSPACES_EXPLICIT_ALIAS_PLACEHOLDER_KEY[] =
     "_hyprspaces-persistent-alias-placeholder";
 
 class Workspaces;

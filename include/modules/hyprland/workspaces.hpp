@@ -16,6 +16,7 @@
 #include "AModule.hpp"
 #include "bar.hpp"
 #include "modules/hyprland/backend.hpp"
+#include "modules/hyprland/hyprspaces.hpp"
 #include "modules/hyprland/windowcreationpayload.hpp"
 #include "modules/hyprland/workspace.hpp"
 #include "util/enum.hpp"
@@ -150,33 +151,60 @@ class Workspaces : public AModule, public EventHandler {
   void setCurrentMonitorId();
   void loadPersistentWorkspacesFromConfig(Json::Value const& clientsJson);
   void loadPersistentWorkspacesFromWorkspaceRules(const Json::Value& clientsJson);
-  std::optional<int> getHyprspacesDisplaySlot(int workspaceId) const;
-  std::optional<std::string> getHyprspacesWorkspaceKey(int workspaceId,
-                                                       std::string const& output) const;
+  std::optional<std::string> getHyprspacesCanonicalSlotKey(int workspaceId,
+                                                           std::string const& output) const;
   std::optional<std::string> getMonitorName(int monitorId) const;
   std::optional<std::string> getClientOutput(Json::Value const& clientData) const;
-  std::optional<std::string> getClientHyprspacesWorkspaceKey(
+  std::optional<std::string> getClientHyprspacesCanonicalSlotKey(
       Json::Value const& clientData) const;
   std::optional<std::string> getWindowPayloadOutput(
       WindowCreationPayload const& windowPayload) const;
-  std::optional<std::string> getWindowPayloadHyprspacesWorkspaceKey(
+  std::optional<std::string> getWindowPayloadHyprspacesCanonicalSlotKey(
       WindowCreationPayload const& windowPayload) const;
   bool hasDuplicateHyprspacesRealOwners(std::string const& key) const;
-  bool shouldUseHyprspacesKeyForState(Workspace const& workspace) const;
+  bool shouldUseHyprspacesCanonicalSlotForState(Workspace const& workspace) const;
   bool shouldDisplayWorkspaceData(Json::Value const& workspaceData);
   bool isWorkspaceJsonRawMatch(Workspace const& workspace,
                                Json::Value const& workspaceData) const;
   bool isWorkspaceJsonSameRealWorkspace(Workspace const& workspace,
                                         Json::Value const& workspaceData) const;
   bool isWorkspaceJsonMatch(Workspace const& workspace,
-                             Json::Value const& workspaceData) const;
-  void rememberHyprspacesPersistentAlias(Json::Value const& workspaceData);
+                              Json::Value const& workspaceData) const;
+  std::optional<HyprspacesPersistentAliasMetadata> readHyprspacesPersistentAliasMetadata(
+      Json::Value const& workspaceData) const;
+  Json::Value createHyprspacesExplicitAliasPlaceholderData(
+      HyprspacesPersistentAliasMetadata const& alias) const;
+  void rememberHyprspacesPersistentAlias(HyprspacesPersistentAliasMetadata alias);
+  bool isHyprspacesExplicitAliasPlaceholderInput(Json::Value const& workspaceData) const;
   bool isHyprspacesPersistentAliasPlaceholder(Workspace const& workspace) const;
-  void reconcileHyprspacesWorkspaceKey(std::string const& key);
+  void reconcileHyprspacesCanonicalSlotKey(std::string const& key);
 
-  struct HyprspacesPersistentAlias {
-    Json::Value workspaceData;
+  struct WorkspaceStateSources {
+    std::vector<int> visibleWorkspaceIds;
+    Json::Value workspaces;
+    Json::Value activeWorkspace;
+    Json::Value monitors;
   };
+
+  struct WorkspaceStateContext {
+    std::vector<int> visibleWorkspaceIds;
+    Json::Value updatedWorkspaces;
+    int activeWorkspaceId = 0;
+    std::string activeWorkspaceName;
+    std::string activeSpecialWorkspaceName;
+    std::string activeWorkspaceOutput;
+    bool monitorHasSpecialWorkspace = false;
+    bool hyprspacesPairingEnabled = false;
+    HyprspacesStateIndex hyprspacesIndex;
+  };
+
+  WorkspaceStateSources fetchWorkspaceStateSources();
+  WorkspaceStateContext indexWorkspaceState(WorkspaceStateSources const& sources) const;
+  void reconcileWorkspaceStateOutputs(Json::Value const& updatedWorkspaces);
+  HyprspacesWorkspaceRenderState classifyWorkspaceState(
+      Workspace const& workspace, WorkspaceStateContext const& context) const;
+  void renderWorkspaceState(Workspace& workspace,
+                            HyprspacesWorkspaceRenderState const& state);
 
   bool m_allOutputs = false;
   bool m_showSpecial = false;
@@ -220,8 +248,8 @@ class Workspaces : public AModule, public EventHandler {
   std::vector<std::pair<Json::Value, Json::Value>> m_workspacesToCreate;
   std::vector<std::string> m_workspacesToRemove;
   std::vector<WindowCreationPayload> m_windowsToCreate;
-  std::map<std::string, HyprspacesPersistentAlias> m_hyprspacesPersistentAliases;
-  bool m_reconcilingHyprspacesWorkspaceKey = false;
+  std::map<std::string, HyprspacesPersistentAliasMetadata> m_hyprspacesPersistentAliases;
+  bool m_reconcilingHyprspacesCanonicalSlotKey = false;
 
   IconLoader m_iconLoader;
   bool m_enableTaskbar = false;

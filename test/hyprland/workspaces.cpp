@@ -103,8 +103,21 @@ TEST_CASE("Hyprspaces coalescing keeps duplicate real slot owners separate",
   REQUIRE(result.creates.size() == 2);
   CHECK(result.creates[0].workspace.id == 1);
   CHECK(result.creates[1].workspace.id == 11);
-  CHECK(hyprland::makeHyprspacesWorkspaceKeyForOffset(1, "DP-1", 10) ==
-        hyprland::makeHyprspacesWorkspaceKeyForOffset(11, "DP-1", 10));
+  CHECK(hyprland::makeHyprspacesCanonicalSlotKeyForOffset(1, "DP-1", 10) ==
+        hyprland::makeHyprspacesCanonicalSlotKeyForOffset(11, "DP-1", 10));
+}
+
+TEST_CASE("Hyprspaces persistent aliases are typed metadata", "[hyprland][hyprspaces]") {
+  const auto alias = hyprland::makeHyprspacesPersistentAliasMetadata(
+      11, "11", "HDMI-A-1", true, false);
+
+  CHECK(alias.id == 11);
+  CHECK(alias.name == "11");
+  CHECK(alias.output == "HDMI-A-1");
+  CHECK(alias.persistentConfig);
+  CHECK_FALSE(alias.persistentRule);
+  CHECK(hyprland::makeHyprspacesCanonicalSlotKeyForOffset(alias.id, alias.output, 10) ==
+        "HDMI-A-1:1");
 }
 
 TEST_CASE("Hyprspaces persistent ids follow refreshed monitor ids",
@@ -132,7 +145,7 @@ TEST_CASE("Hyprspaces persistent placeholders use configured all outputs target"
 
   CHECK(output == "HDMI-A-1");
   CHECK(id == 11);
-  CHECK(hyprland::makeHyprspacesWorkspaceKeyForOffset(id, output, 10) == "HDMI-A-1:1");
+  CHECK(hyprland::makeHyprspacesCanonicalSlotKeyForOffset(id, output, 10) == "HDMI-A-1:1");
 }
 
 TEST_CASE("Hyprspaces persistent placeholders keep bar output without explicit all outputs target",
@@ -144,7 +157,7 @@ TEST_CASE("Hyprspaces persistent placeholders keep bar output without explicit a
         "DP-1");
   CHECK(output == "DP-1");
   CHECK(id == 1);
-  CHECK(hyprland::makeHyprspacesWorkspaceKeyForOffset(id, output, 10) == "DP-1:1");
+  CHECK(hyprland::makeHyprspacesCanonicalSlotKeyForOffset(id, output, 10) == "DP-1:1");
 }
 
 TEST_CASE("Hyprspaces workspace-name persistent placeholders target configured monitors",
@@ -161,7 +174,7 @@ TEST_CASE("Hyprspaces workspace-name persistent placeholders target configured m
   CHECK(*allOutputsTarget == "HDMI-A-1");
   CHECK(*currentOutputTarget == "HDMI-A-1");
   CHECK_FALSE(otherOutputTarget.has_value());
-  CHECK(hyprland::makeHyprspacesWorkspaceKeyForOffset(11, *allOutputsTarget, 10) ==
+  CHECK(hyprland::makeHyprspacesCanonicalSlotKeyForOffset(11, *allOutputsTarget, 10) ==
         "HDMI-A-1:1");
 }
 
@@ -174,7 +187,83 @@ TEST_CASE("Hyprspaces workspace-rule placeholders select configured or bar outpu
 
   CHECK(configuredRuleOutput == "HDMI-A-1");
   CHECK(emptyRuleOutput == "DP-1");
-  CHECK(hyprland::makeHyprspacesWorkspaceKeyForOffset(11, configuredRuleOutput, 10) ==
+  CHECK(hyprland::makeHyprspacesCanonicalSlotKeyForOffset(11, configuredRuleOutput, 10) ==
         "HDMI-A-1:1");
-  CHECK(hyprland::makeHyprspacesWorkspaceKeyForOffset(11, emptyRuleOutput, 10) == "DP-1:1");
+  CHECK(hyprland::makeHyprspacesCanonicalSlotKeyForOffset(11, emptyRuleOutput, 10) == "DP-1:1");
+}
+
+TEST_CASE("Hyprspaces state index tracks raw ids and canonical slots",
+          "[hyprland][hyprspaces]") {
+  const std::vector<hyprland::HyprspacesQueuedWorkspace> snapshot{
+      queuedWorkspace(1, "1", "DP-1"),
+      queuedWorkspace(11, "11", "DP-1", 2),
+  };
+  const std::vector<hyprland::HyprspacesVisibleWorkspace> visibleSlots{{11, "DP-1"}};
+  const std::vector<int> visibleRawIds{1, 11};
+
+  const auto index = hyprland::buildHyprspacesStateIndex(snapshot, visibleSlots,
+                                                         visibleRawIds, 10);
+
+  CHECK(index.visibleRawIds.contains(1));
+  CHECK(index.visibleRawIds.contains(11));
+  CHECK_FALSE(index.occupiedRawIds.contains(1));
+  CHECK(index.occupiedRawIds.contains(11));
+  CHECK(index.visibleCanonicalSlotKeys.contains("DP-1:1"));
+  CHECK(index.occupiedCanonicalSlotKeys.contains("DP-1:1"));
+}
+
+TEST_CASE("Hyprspaces aliases classify as explicit empty placeholders",
+          "[hyprland][hyprspaces]") {
+  hyprland::HyprspacesStateIndex index;
+  index.visibleRawIds.insert(1);
+  index.visibleCanonicalSlotKeys.insert("DP-1:1");
+  index.occupiedCanonicalSlotKeys.insert("DP-1:1");
+
+  const hyprland::HyprspacesWorkspaceView placeholder{1, "1", "DP-1", false, true, false};
+  const hyprland::HyprspacesWorkspaceView canonicalOwner{1, "1", "DP-1", false, false, true};
+  const hyprland::HyprspacesActiveContext active{11, "11", "DP-1", "", false, true};
+
+  const auto canonicalState = hyprland::classifyHyprspacesWorkspaceState(
+      canonicalOwner, active, index, 10);
+  const auto state = hyprland::classifyHyprspacesWorkspaceState(placeholder, active, index, 10);
+
+  CHECK(canonicalState.active);
+  CHECK(canonicalState.visible);
+  REQUIRE(canonicalState.empty.has_value());
+  CHECK_FALSE(*canonicalState.empty);
+
+  CHECK_FALSE(state.active);
+  CHECK_FALSE(state.visible);
+  REQUIRE(state.displaySlot.has_value());
+  CHECK(*state.displaySlot == 1);
+  REQUIRE(state.displayLabel.has_value());
+  CHECK(*state.displayLabel == "1");
+  REQUIRE(state.empty.has_value());
+  CHECK(*state.empty);
+}
+
+TEST_CASE("Hyprspaces duplicate real owners classify by raw identity",
+          "[hyprland][hyprspaces]") {
+  hyprland::HyprspacesStateIndex index;
+  index.visibleRawIds.insert(11);
+  index.occupiedRawIds.insert(11);
+  index.visibleCanonicalSlotKeys.insert("DP-1:1");
+  index.occupiedCanonicalSlotKeys.insert("DP-1:1");
+
+  const hyprland::HyprspacesActiveContext active{11, "11", "DP-1", "", false, false};
+  const hyprland::HyprspacesWorkspaceView rawOne{1, "1", "DP-1", false, false, false};
+  const hyprland::HyprspacesWorkspaceView rawEleven{11, "11", "DP-1", false, false, false};
+
+  const auto firstState = hyprland::classifyHyprspacesWorkspaceState(rawOne, active, index, 10);
+  const auto secondState = hyprland::classifyHyprspacesWorkspaceState(rawEleven, active, index, 10);
+
+  CHECK_FALSE(firstState.active);
+  CHECK_FALSE(firstState.visible);
+  REQUIRE(firstState.empty.has_value());
+  CHECK(*firstState.empty);
+
+  CHECK(secondState.active);
+  CHECK(secondState.visible);
+  REQUIRE(secondState.empty.has_value());
+  CHECK_FALSE(*secondState.empty);
 }
