@@ -68,14 +68,19 @@ class Workspaces : public AModule, public EventHandler {
 
   bool windowRewriteConfigUsesTitle() const { return m_anyWindowRewriteRuleUsesTitle; }
   const IconLoader& iconLoader() const { return m_iconLoader; }
+  bool isWorkspacePersistent(Workspace const& workspace) const;
+  bool isWindowInWorkspace(Workspace const& workspace, Json::Value const& clientData) const;
+  bool isWindowInWorkspace(Workspace const& workspace,
+                           WindowCreationPayload const& windowPayload) const;
 
  private:
   void onEvent(const std::string& e) override;
   void updateWindowCount();
   void sortSpecialCentered();
   void sortWorkspaces();
-  void createWorkspace(Json::Value const& workspace_data,
-                       Json::Value const& clients_data = Json::Value::nullRef);
+  Workspace* createWorkspace(Json::Value const& workspace_data,
+                             Json::Value const& clients_data = Json::Value::nullRef,
+                             bool initializeWindowMap = true);
 
   static Json::Value createMonitorWorkspaceData(std::string const& name,
                                                 std::string const& monitor);
@@ -132,6 +137,7 @@ class Workspaces : public AModule, public EventHandler {
   // Update methods
   void doUpdate();
   void removeWorkspacesToRemove();
+  void coalescePendingWorkspaceEvents();
   void createWorkspacesToCreate();
   static std::vector<int> getVisibleWorkspaces();
   void updateWorkspaceStates();
@@ -144,6 +150,33 @@ class Workspaces : public AModule, public EventHandler {
   void setCurrentMonitorId();
   void loadPersistentWorkspacesFromConfig(Json::Value const& clientsJson);
   void loadPersistentWorkspacesFromWorkspaceRules(const Json::Value& clientsJson);
+  std::optional<int> getHyprspacesDisplaySlot(int workspaceId) const;
+  std::optional<std::string> getHyprspacesWorkspaceKey(int workspaceId,
+                                                       std::string const& output) const;
+  std::optional<std::string> getMonitorName(int monitorId) const;
+  std::optional<std::string> getClientOutput(Json::Value const& clientData) const;
+  std::optional<std::string> getClientHyprspacesWorkspaceKey(
+      Json::Value const& clientData) const;
+  std::optional<std::string> getWindowPayloadOutput(
+      WindowCreationPayload const& windowPayload) const;
+  std::optional<std::string> getWindowPayloadHyprspacesWorkspaceKey(
+      WindowCreationPayload const& windowPayload) const;
+  bool hasDuplicateHyprspacesRealOwners(std::string const& key) const;
+  bool shouldUseHyprspacesKeyForState(Workspace const& workspace) const;
+  bool shouldDisplayWorkspaceData(Json::Value const& workspaceData);
+  bool isWorkspaceJsonRawMatch(Workspace const& workspace,
+                               Json::Value const& workspaceData) const;
+  bool isWorkspaceJsonSameRealWorkspace(Workspace const& workspace,
+                                        Json::Value const& workspaceData) const;
+  bool isWorkspaceJsonMatch(Workspace const& workspace,
+                             Json::Value const& workspaceData) const;
+  void rememberHyprspacesPersistentAlias(Json::Value const& workspaceData);
+  bool isHyprspacesPersistentAliasPlaceholder(Workspace const& workspace) const;
+  void reconcileHyprspacesWorkspaceKey(std::string const& key);
+
+  struct HyprspacesPersistentAlias {
+    Json::Value workspaceData;
+  };
 
   bool m_allOutputs = false;
   bool m_showSpecial = false;
@@ -187,6 +220,8 @@ class Workspaces : public AModule, public EventHandler {
   std::vector<std::pair<Json::Value, Json::Value>> m_workspacesToCreate;
   std::vector<std::string> m_workspacesToRemove;
   std::vector<WindowCreationPayload> m_windowsToCreate;
+  std::map<std::string, HyprspacesPersistentAlias> m_hyprspacesPersistentAliases;
+  bool m_reconcilingHyprspacesWorkspaceKey = false;
 
   IconLoader m_iconLoader;
   bool m_enableTaskbar = false;

@@ -7,13 +7,17 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
+#include "modules/hyprland/hyprspaces.hpp"
 #include "util/regex_collection.hpp"
 #include "util/string.hpp"
 
 namespace waybar::modules::hyprland {
+
+bool isDoubleSpecial(std::string const& workspace_name);
 
 Workspaces::Workspaces(const std::string& id, const Bar& bar, const Json::Value& config)
     : AModule(config, "workspaces", id, false, false),
@@ -29,7 +33,6 @@ Workspaces::Workspaces(const std::string& id, const Bar& bar, const Json::Value&
   m_box.get_style_context()->add_class(MODULE_CLASS);
   event_box_.add(m_box);
 
-  setCurrentMonitorId();
   init();
   registerIpc();
 }
@@ -41,6 +44,7 @@ Workspaces::~Workspaces() {
 }
 
 void Workspaces::init() {
+  setCurrentMonitorId();
   m_activeWorkspaceId = m_ipc.getSocket1JsonReply("activeworkspace")["id"].asInt();
 
   initializeWorkspaces();
@@ -70,59 +74,478 @@ Json::Value Workspaces::createMonitorWorkspaceData(std::string const& name,
   return workspaceData;
 }
 
-void Workspaces::createWorkspace(Json::Value const& workspace_data,
-                                 Json::Value const& clients_data) {
+std::optional<int> Workspaces::getHyprspacesDisplaySlot(int workspaceId) const {
+  return getHyprspacesDisplaySlotForOffset(workspaceId, m_hyprspacesPairedOffset);
+}
+
+std::optional<std::string> Workspaces::getHyprspacesWorkspaceKey(
+    int workspaceId, std::string const& output) const {
+  return makeHyprspacesWorkspaceKeyForOffset(workspaceId, output, m_hyprspacesPairedOffset);
+}
+
+std::optional<std::string> Workspaces::getMonitorName(int monitorId) const {
+  const auto monitors = m_ipc.getSocket1JsonReply("monitors");
+  auto monitor = std::ranges::find_if(monitors, [&](Json::Value const& value) {
+    return value["id"].isInt() && value["id"].asInt() == monitorId;
+  });
+  if (monitor == monitors.end() || !(*monitor)["name"].isString()) {
+    return std::nullopt;
+  }
+  return (*monitor)["name"].asString();
+}
+
+std::optional<std::string> Workspaces::getClientOutput(Json::Value const& clientData) const {
+  if (clientData["workspace"].isObject() && clientData["workspace"]["monitor"].isString()) {
+    return clientData["workspace"]["monitor"].asString();
+  }
+  if (clientData["monitor"].isString()) {
+    return clientData["monitor"].asString();
+  }
+  if (clientData["monitor"].isInt()) {
+    return getMonitorName(clientData["monitor"].asInt());
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> Workspaces::getClientHyprspacesWorkspaceKey(
+    Json::Value const& clientData) const {
+  if (!clientData["workspace"].isObject() || !clientData["workspace"]["id"].isInt()) {
+    return std::nullopt;
+  }
+  const auto output = getClientOutput(clientData);
+  if (!output.has_value()) {
+    return std::nullopt;
+  }
+  return getHyprspacesWorkspaceKey(clientData["workspace"]["id"].asInt(), *output);
+}
+
+std::optional<std::string> Workspaces::getWindowPayloadOutput(
+    WindowCreationPayload const& windowPayload) const {
+  if (windowPayload.getWorkspaceOutput().has_value()) {
+    return windowPayload.getWorkspaceOutput();
+  }
+  if (windowPayload.getMonitorId().has_value()) {
+    return getMonitorName(*windowPayload.getMonitorId());
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> Workspaces::getWindowPayloadHyprspacesWorkspaceKey(
+    WindowCreationPayload const& windowPayload) const {
+  auto workspaceId = windowPayload.getWorkspaceId();
+  if (!workspaceId.has_value()) {
+    workspaceId = parseWorkspaceId(windowPayload.getWorkspaceName());
+  }
+  const auto output = getWindowPayloadOutput(windowPayload);
+  if (!workspaceId.has_value() || !output.has_value()) {
+    return std::nullopt;
+  }
+  return getHyprspacesWorkspaceKey(*workspaceId, *output);
+}
+
+bool Workspaces::hasDuplicateHyprspacesRealOwners(std::string const& key) const {
+  int realOwners = 0;
+  for (auto const& workspace : m_workspaces) {
+    if (isHyprspacesPersistentAliasPlaceholder(*workspace)) {
+      continue;
+    }
+
+    const auto workspaceKey = getHyprspacesWorkspaceKey(workspace->id(), workspace->output());
+    if (workspaceKey.has_value() && *workspaceKey == key && ++realOwners > 1) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool Workspaces::shouldUseHyprspacesKeyForState(Workspace const& workspace) const {
+  if (isHyprspacesPersistentAliasPlaceholder(workspace)) {
+    return false;
+  }
+
+  const auto workspaceKey = getHyprspacesWorkspaceKey(workspace.id(), workspace.output());
+  return workspaceKey.has_value() && !hasDuplicateHyprspacesRealOwners(*workspaceKey);
+}
+
+bool Workspaces::shouldDisplayWorkspaceData(Json::Value const& workspaceData) {
+  const std::string workspaceName = workspaceData["name"].asString();
+  return (allOutputs() || m_bar.output->name == workspaceData["monitor"].asString()) &&
+         (!workspaceName.starts_with("special") || showSpecialWorkspaceEntries()) &&
+         !isDoubleSpecial(workspaceName) && !isWorkspaceIgnored(workspaceName);
+}
+
+bool Workspaces::isWorkspaceJsonRawMatch(Workspace const& workspace,
+                                          Json::Value const& workspaceData) const {
+  if (workspace.id() > 0 && workspaceData["id"].isInt() &&
+      workspaceData["id"].asInt() == workspace.id()) {
+    return true;
+  }
+
+  const auto workspaceName = workspaceData["name"].asString();
+  return workspaceName == workspace.name() ||
+         (workspace.isSpecial() && workspaceName == "special:" + workspace.name());
+}
+
+bool Workspaces::isWorkspaceJsonSameRealWorkspace(
+    Workspace const& workspace, Json::Value const& workspaceData) const {
+  return !isHyprspacesPersistentAliasPlaceholder(workspace) && workspaceData["id"].isInt() &&
+         workspaceData["name"].isString() &&
+         isSameHyprspacesSnapshotWorkspace(workspace.id(), workspace.name(),
+                                           workspaceData["id"].asInt(),
+                                           workspaceData["name"].asString());
+}
+
+bool Workspaces::isWorkspaceJsonMatch(Workspace const& workspace,
+                                      Json::Value const& workspaceData) const {
+  const auto workspaceKey = getHyprspacesWorkspaceKey(workspace.id(), workspace.output());
+  if (workspaceKey.has_value()) {
+    if (isHyprspacesPersistentAliasPlaceholder(workspace)) {
+      return false;
+    }
+    if (!shouldUseHyprspacesKeyForState(workspace)) {
+      return isWorkspaceJsonRawMatch(workspace, workspaceData);
+    }
+    if (!workspaceData["id"].isInt() || !workspaceData["monitor"].isString()) {
+      return false;
+    }
+
+    const auto candidateKey =
+        getHyprspacesWorkspaceKey(workspaceData["id"].asInt(), workspaceData["monitor"].asString());
+    return candidateKey.has_value() && candidateKey == workspaceKey;
+  }
+
+  return isWorkspaceJsonRawMatch(workspace, workspaceData);
+}
+
+bool Workspaces::isWindowInWorkspace(Workspace const& workspace,
+                                     Json::Value const& clientData) const {
+  const auto workspaceKey = getHyprspacesWorkspaceKey(workspace.id(), workspace.output());
+  if (workspaceKey.has_value()) {
+    if (isHyprspacesPersistentAliasPlaceholder(workspace)) {
+      return false;
+    }
+
+    const auto clientKey = getClientHyprspacesWorkspaceKey(clientData);
+    if (shouldUseHyprspacesKeyForState(workspace) && clientKey.has_value()) {
+      return clientKey == workspaceKey;
+    }
+  }
+
+  return clientData["workspace"].isObject() && clientData["workspace"]["id"].isInt() &&
+         clientData["workspace"]["id"].asInt() == workspace.id();
+}
+
+bool Workspaces::isWindowInWorkspace(Workspace const& workspace,
+                                     WindowCreationPayload const& windowPayload) const {
+  const auto workspaceKey = getHyprspacesWorkspaceKey(workspace.id(), workspace.output());
+  if (workspaceKey.has_value()) {
+    if (isHyprspacesPersistentAliasPlaceholder(workspace)) {
+      return false;
+    }
+
+    const auto payloadKey = getWindowPayloadHyprspacesWorkspaceKey(windowPayload);
+    if (shouldUseHyprspacesKeyForState(workspace) && payloadKey.has_value()) {
+      return payloadKey == workspaceKey;
+    }
+
+    if (windowPayload.getWorkspaceId().has_value()) {
+      return *windowPayload.getWorkspaceId() == workspace.id();
+    }
+  }
+
+  return windowPayload.getWorkspaceName() == workspace.name();
+}
+
+void Workspaces::rememberHyprspacesPersistentAlias(Json::Value const& workspaceData) {
+  if (!workspaceData["id"].isInt() || !workspaceData["monitor"].isString()) {
+    return;
+  }
+
+  auto key = getHyprspacesWorkspaceKey(workspaceData["id"].asInt(),
+                                       workspaceData["monitor"].asString());
+  if (key.has_value()) {
+    m_hyprspacesPersistentAliases[*key] = HyprspacesPersistentAlias{workspaceData};
+  }
+}
+
+bool Workspaces::isHyprspacesPersistentAliasPlaceholder(Workspace const& workspace) const {
+  return workspace.isHyprspacesPersistentAliasPlaceholder();
+}
+
+void Workspaces::reconcileHyprspacesWorkspaceKey(std::string const& key) {
+  if (key.empty() || m_hyprspacesPairedOffset <= 0 || m_reconcilingHyprspacesWorkspaceKey) {
+    return;
+  }
+
+  struct ReconcileGuard {
+    bool& reconciling;
+    ~ReconcileGuard() { reconciling = false; }
+  } guard{m_reconcilingHyprspacesWorkspaceKey};
+  m_reconcilingHyprspacesWorkspaceKey = true;
+
+  std::vector<size_t> matchingWorkspaces;
+  for (size_t i = 0; i < m_workspaces.size(); ++i) {
+    const auto workspaceKey =
+        getHyprspacesWorkspaceKey(m_workspaces[i]->id(), m_workspaces[i]->output());
+    if (workspaceKey.has_value() && *workspaceKey == key) {
+      matchingWorkspaces.push_back(i);
+    }
+  }
+
+  const auto alias = m_hyprspacesPersistentAliases.find(key);
+  if (matchingWorkspaces.empty()) {
+    if (alias != m_hyprspacesPersistentAliases.end()) {
+      createWorkspace(alias->second.workspaceData);
+    }
+    return;
+  }
+
+  std::vector<size_t> keptRealWorkspaces;
+  std::unordered_set<size_t> duplicateRawWorkspaces;
+  for (const size_t index : matchingWorkspaces) {
+    if (isHyprspacesPersistentAliasPlaceholder(*m_workspaces[index])) {
+      continue;
+    }
+
+    const bool sameRawIdentityAlreadyKept = std::ranges::any_of(
+        keptRealWorkspaces, [&](size_t keptIndex) {
+          return isSameHyprspacesRawWorkspaceIdentity(
+              m_workspaces[index]->id(), m_workspaces[index]->name(), m_workspaces[index]->output(),
+              m_workspaces[keptIndex]->id(), m_workspaces[keptIndex]->name(),
+              m_workspaces[keptIndex]->output());
+        });
+    if (sameRawIdentityAlreadyKept) {
+      duplicateRawWorkspaces.insert(index);
+    } else {
+      keptRealWorkspaces.push_back(index);
+    }
+  }
+
+  size_t owner = matchingWorkspaces.front();
+  if (alias != m_hyprspacesPersistentAliases.end()) {
+    auto realWorkspace = std::ranges::find_if(matchingWorkspaces, [&](size_t index) {
+      return !isHyprspacesPersistentAliasPlaceholder(*m_workspaces[index]);
+    });
+    if (realWorkspace != matchingWorkspaces.end()) {
+      owner = *realWorkspace;
+    }
+  }
+
+  for (auto it = matchingWorkspaces.rbegin(); it != matchingWorkspaces.rend(); ++it) {
+    const size_t index = *it;
+    if (index == owner) {
+      continue;
+    }
+    if (!isHyprspacesPersistentAliasPlaceholder(*m_workspaces[index]) &&
+        !duplicateRawWorkspaces.contains(index)) {
+      spdlog::debug("Leaving duplicate real workspace id={} for hyprspaces slot {}",
+                    m_workspaces[index]->id(), key);
+      continue;
+    }
+    spdlog::debug("Removing duplicate workspace id={} for hyprspaces slot {}",
+                  m_workspaces[index]->id(), key);
+    m_box.remove(m_workspaces[index]->button());
+    m_workspaces.erase(m_workspaces.begin() + index);
+  }
+}
+
+bool Workspaces::isWorkspacePersistent(Workspace const& workspace) const {
+  const auto workspaceKey = getHyprspacesWorkspaceKey(workspace.id(), workspace.output());
+  if (workspaceKey.has_value()) {
+    return m_hyprspacesPersistentAliases.contains(*workspaceKey);
+  }
+
+  return workspace.isPersistent();
+}
+
+Workspace* Workspaces::createWorkspace(Json::Value const& workspace_data,
+                                       Json::Value const& clients_data,
+                                       bool initializeWindowMap) {
   auto workspaceName = workspace_data["name"].asString();
   auto workspaceId = workspace_data["id"].asInt();
+  auto workspaceOutput = workspace_data["monitor"].asString();
+  const auto hyprspacesWorkspaceKey = getHyprspacesWorkspaceKey(workspaceId, workspaceOutput);
+  const bool isHyprspacesPersistentAlias =
+      hyprspacesWorkspaceKey.has_value() &&
+      workspace_data[HYPRSPACES_PERSISTENT_ALIAS_PLACEHOLDER_KEY].asBool();
+  Json::Value workspaceData = workspace_data;
+  if (hyprspacesWorkspaceKey.has_value()) {
+    if (isHyprspacesPersistentAlias) {
+      rememberHyprspacesPersistentAlias(workspace_data);
+    }
+    workspaceData["persistent-config"] = false;
+    workspaceData["persistent-rule"] = false;
+  }
   spdlog::debug("Creating workspace {}", workspaceName);
 
   // avoid recreating existing workspaces
   auto workspace = std::ranges::find_if(m_workspaces, [&](std::unique_ptr<Workspace> const& w) {
     if (workspaceId > 0) {
-      return w->id() == workspaceId;
+      if (!hyprspacesWorkspaceKey.has_value()) {
+        return w->id() == workspaceId;
+      }
+
+      const auto existingWorkspaceKey = getHyprspacesWorkspaceKey(w->id(), w->output());
+      const bool sameRawIdentity = isSameHyprspacesRawWorkspaceIdentity(
+          w->id(), w->name(), w->output(), workspaceId, workspaceName, workspaceOutput);
+      if (sameRawIdentity && !isHyprspacesPersistentAliasPlaceholder(*w) &&
+          !isHyprspacesPersistentAlias) {
+        return true;
+      }
+
+      if (existingWorkspaceKey.has_value() && existingWorkspaceKey == hyprspacesWorkspaceKey) {
+        return isHyprspacesPersistentAliasPlaceholder(*w) || isHyprspacesPersistentAlias;
+      }
+
+      return w->id() == workspaceId && !isHyprspacesPersistentAlias;
     }
     return (workspaceName.starts_with("special:") && workspaceName.substr(8) == w->name()) ||
            workspaceName == w->name();
   });
 
+  if (workspace != m_workspaces.end() && hyprspacesWorkspaceKey.has_value() &&
+      !isHyprspacesPersistentAlias &&
+      isHyprspacesPersistentAliasPlaceholder(**workspace)) {
+    spdlog::debug(
+        "Replacing alias placeholder id={} with real workspace id={} for hyprspaces slot {}",
+        (*workspace)->id(), workspaceId, *hyprspacesWorkspaceKey);
+    m_box.remove((*workspace)->button());
+    m_workspaces.erase(workspace);
+    workspace = m_workspaces.end();
+  }
+
   if (workspace != m_workspaces.end()) {
     // don't recreate workspace, but update persistency if necessary
-    const auto keys = workspace_data.getMemberNames();
+    const auto keys = workspaceData.getMemberNames();
 
     const auto* k = "persistent-rule";
     if (std::ranges::find(keys, k) != keys.end()) {
       spdlog::debug("Set dynamic persistency of workspace {} to: {}", workspaceName,
-                    workspace_data[k].asBool() ? "true" : "false");
-      (*workspace)->setPersistentRule(workspace_data[k].asBool());
+                    workspaceData[k].asBool() ? "true" : "false");
+      (*workspace)->setPersistentRule(workspaceData[k].asBool());
     }
 
     k = "persistent-config";
     if (std::ranges::find(keys, k) != keys.end()) {
       spdlog::debug("Set config persistency of workspace {} to: {}", workspaceName,
-                    workspace_data[k].asBool() ? "true" : "false");
-      (*workspace)->setPersistentConfig(workspace_data[k].asBool());
+                    workspaceData[k].asBool() ? "true" : "false");
+      (*workspace)->setPersistentConfig(workspaceData[k].asBool());
     }
 
-    return;
+    if (hyprspacesWorkspaceKey.has_value()) {
+      reconcileHyprspacesWorkspaceKey(*hyprspacesWorkspaceKey);
+    }
+
+    return nullptr;
   }
 
   // create new workspace
-  m_workspaces.emplace_back(std::make_unique<Workspace>(workspace_data, *this, clients_data));
+  m_workspaces.emplace_back(std::make_unique<Workspace>(workspaceData, *this));
+  auto* createdWorkspace = m_workspaces.back().get();
+  if (initializeWindowMap) {
+    createdWorkspace->initializeWindowMap(clients_data);
+  }
   Gtk::Button& newWorkspaceButton = m_workspaces.back()->button();
   m_box.pack_start(newWorkspaceButton, false, false);
   sortWorkspaces();
   newWorkspaceButton.show_all();
+  if (hyprspacesWorkspaceKey.has_value()) {
+    reconcileHyprspacesWorkspaceKey(*hyprspacesWorkspaceKey);
+  }
+  return createdWorkspace;
 }
 
 void Workspaces::createWorkspacesToCreate() {
+  struct PendingWindowMapInit {
+    Workspace* workspace;
+    int id;
+    std::string name;
+    std::string output;
+    Json::Value clientsData;
+  };
+
+  std::vector<PendingWindowMapInit> pendingWindowMapInits;
   for (const auto& [workspaceData, clientsData] : m_workspacesToCreate) {
-    createWorkspace(workspaceData, clientsData);
+    auto* createdWorkspace = createWorkspace(workspaceData, clientsData, false);
+    if (createdWorkspace != nullptr) {
+      pendingWindowMapInits.push_back({createdWorkspace, createdWorkspace->id(),
+                                       createdWorkspace->name(), createdWorkspace->output(),
+                                       clientsData});
+    }
   }
+
+  for (const auto& pendingInit : pendingWindowMapInits) {
+    auto workspace = std::ranges::find_if(m_workspaces, [&](const auto& current) {
+      return current.get() == pendingInit.workspace && current->id() == pendingInit.id &&
+             current->name() == pendingInit.name && current->output() == pendingInit.output;
+    });
+    if (workspace != m_workspaces.end()) {
+      (*workspace)->initializeWindowMap(pendingInit.clientsData);
+    }
+  }
+
   if (!m_workspacesToCreate.empty()) {
     updateWindowCount();
     sortWorkspaces();
   }
   m_workspacesToCreate.clear();
+}
+
+void Workspaces::coalescePendingWorkspaceEvents() {
+  auto makeQueuedWorkspace = [](Json::Value const& workspaceData) {
+    HyprspacesQueuedWorkspace workspace;
+    workspace.id = workspaceData["id"].asInt();
+    workspace.name = workspaceData["name"].asString();
+    workspace.output = workspaceData["monitor"].asString();
+    workspace.windows = workspaceData["windows"].asInt();
+    workspace.persistentConfig = workspaceData["persistent-config"].asBool();
+    workspace.persistentRule = workspaceData["persistent-rule"].asBool();
+    workspace.aliasPlaceholder =
+        workspaceData[HYPRSPACES_PERSISTENT_ALIAS_PLACEHOLDER_KEY].asBool();
+    return workspace;
+  };
+
+  if (m_workspacesToCreate.empty()) {
+    m_workspacesToRemove = coalesceHyprspacesWorkspaceEvents(
+        m_workspacesToRemove, {}, {}, m_hyprspacesPairedOffset)
+                               .removes;
+    return;
+  }
+
+  const auto workspacesJson = m_ipc.getSocket1JsonReply("workspaces");
+  std::vector<HyprspacesQueuedWorkspace> queuedCreates;
+  queuedCreates.reserve(m_workspacesToCreate.size());
+  for (const auto& [workspaceData, _] : m_workspacesToCreate) {
+    queuedCreates.push_back(makeQueuedWorkspace(workspaceData));
+  }
+
+  std::vector<HyprspacesQueuedWorkspace> snapshot;
+  for (const auto& workspaceData : workspacesJson) {
+    auto workspace = makeQueuedWorkspace(workspaceData);
+    workspace.displayable = shouldDisplayWorkspaceData(workspaceData);
+    snapshot.push_back(std::move(workspace));
+  }
+
+  const auto coalesced = coalesceHyprspacesWorkspaceEvents(
+      m_workspacesToRemove, queuedCreates, snapshot, m_hyprspacesPairedOffset);
+  m_workspacesToRemove = coalesced.removes;
+
+  std::vector<std::pair<Json::Value, Json::Value>> workspaceCreates;
+  workspaceCreates.reserve(coalesced.creates.size());
+  for (const auto& create : coalesced.creates) {
+    Json::Value workspaceData = m_workspacesToCreate[create.queuedIndex].first;
+    if (create.refreshedFromSnapshot) {
+      workspaceData["id"] = create.workspace.id;
+      workspaceData["name"] = create.workspace.name;
+      workspaceData["monitor"] = create.workspace.output;
+      workspaceData["windows"] = create.workspace.windows;
+    }
+    workspaceCreates.emplace_back(std::move(workspaceData),
+                                  m_workspacesToCreate[create.queuedIndex].second);
+  }
+
+  m_workspacesToCreate = std::move(workspaceCreates);
 }
 
 /**
@@ -134,6 +557,7 @@ void Workspaces::createWorkspacesToCreate() {
 void Workspaces::doUpdate() {
   std::unique_lock lock(m_mutex);
 
+  coalescePendingWorkspaceEvents();
   removeWorkspacesToRemove();
   createWorkspacesToCreate();
   updateWorkspaceStates();
@@ -187,6 +611,7 @@ std::vector<int> Workspaces::getVisibleWorkspaces() {
 
 void Workspaces::initializeWorkspaces() {
   spdlog::debug("Initializing workspaces");
+  m_hyprspacesPersistentAliases.clear();
 
   // if the workspace rules changed since last initialization, make sure we reset everything:
   for (auto& workspace : m_workspaces) {
@@ -198,10 +623,7 @@ void Workspaces::initializeWorkspaces() {
   auto const clientsJson = m_ipc.getSocket1JsonReply("clients");
 
   for (Json::Value workspaceJson : workspacesJson) {
-    std::string workspaceName = workspaceJson["name"].asString();
-    if ((allOutputs() || m_bar.output->name == workspaceJson["monitor"].asString()) &&
-        (!workspaceName.starts_with("special") || showSpecialWorkspaceEntries()) &&
-        !isWorkspaceIgnored(workspaceName)) {
+    if (shouldDisplayWorkspaceData(workspaceJson)) {
       m_workspacesToCreate.emplace_back(workspaceJson, clientsJson);
     } else {
       extendOrphans(workspaceJson["id"].asInt(), clientsJson);
@@ -239,15 +661,41 @@ bool Workspaces::isWorkspaceIgnored(std::string const& name) {
 void Workspaces::loadPersistentWorkspacesFromConfig(Json::Value const& clientsJson) {
   spdlog::info("Loading persistent workspaces from Waybar config");
   const std::vector<std::string> keys = m_persistentWorkspaceConfig.getMemberNames();
-  std::vector<std::string> persistentWorkspacesToCreate;
+  struct PersistentWorkspaceToCreate {
+    std::string name;
+    std::string output;
+  };
+  std::vector<PersistentWorkspaceToCreate> persistentWorkspacesToCreate;
 
   const std::string currentMonitor = m_bar.output->name;
+  std::unordered_map<std::string, int> monitorIdsByName;
+  std::unordered_set<std::string> allMonitorNames;
+  if (allOutputs()) {
+    const auto monitors = m_ipc.getSocket1JsonReply("monitors");
+    for (const auto& monitor : monitors) {
+      if (monitor["name"].isString()) {
+        const auto monitorName = monitor["name"].asString();
+        allMonitorNames.insert(monitorName);
+        if (monitor["id"].isInt()) {
+          monitorIdsByName[monitorName] = monitor["id"].asInt();
+        }
+      }
+    }
+  }
   const bool monitorInConfig = std::ranges::find(keys, currentMonitor) != keys.end();
   for (const std::string& key : keys) {
+    const bool keyIsMonitor = key == currentMonitor ||
+                              (allOutputs() && allMonitorNames.contains(key));
+    const bool keyIsWildcard = key == "*";
     // only add if either:
     // 1. key is the current monitor name
     // 2. key is "*" and this monitor is not already defined in the config
-    bool canCreate = key == currentMonitor || (key == "*" && !monitorInConfig);
+    // 3. all-outputs is enabled and key is an explicit monitor name
+    bool canCreate = keyIsMonitor || (keyIsWildcard && !monitorInConfig);
+    std::string targetMonitor = currentMonitor;
+    if (keyIsMonitor) {
+      targetMonitor = selectHyprspacesPersistentPlaceholderOutput(currentMonitor, key, allOutputs());
+    }
     const Json::Value& value = m_persistentWorkspaceConfig[key];
     spdlog::trace("Parsing persistent workspace config: {} => {}", key, value.toStyledString());
 
@@ -255,40 +703,55 @@ void Workspaces::loadPersistentWorkspacesFromConfig(Json::Value const& clientsJs
       // value is a number => create that many workspaces for this monitor
       if (canCreate) {
         int amount = value.asInt();
-        spdlog::debug("Creating {} persistent workspaces for monitor {}", amount, currentMonitor);
+        spdlog::debug("Creating {} persistent workspaces for monitor {}", amount, targetMonitor);
+        int monitorId = static_cast<int>(m_monitorId);
+        if (const auto targetMonitorId = monitorIdsByName.find(targetMonitor);
+            targetMonitorId != monitorIdsByName.end()) {
+          monitorId = targetMonitorId->second;
+        }
         for (int i = 0; i < amount; i++) {
-          int base = static_cast<int>(m_monitorId) * amount;
-          if (m_hyprspacesPairedOffset > 0) {
-            base = static_cast<int>(m_monitorId) * m_hyprspacesPairedOffset;
-          }
-          persistentWorkspacesToCreate.emplace_back(std::to_string(base + i + 1));
+          const int workspaceId = getHyprspacesPersistentWorkspaceId(
+              monitorId, amount, m_hyprspacesPairedOffset, i);
+          persistentWorkspacesToCreate.push_back({std::to_string(workspaceId), targetMonitor});
         }
       }
     } else if (value.isArray() && !value.empty()) {
       // value is an array => create defined workspaces for this monitor
       if (canCreate) {
         for (const Json::Value& workspace : value) {
-          spdlog::debug("Creating workspace {} on monitor {}", workspace, currentMonitor);
-          persistentWorkspacesToCreate.emplace_back(workspace.asString());
+          spdlog::debug("Creating workspace {} on monitor {}", workspace, targetMonitor);
+          persistentWorkspacesToCreate.push_back({workspace.asString(), targetMonitor});
         }
       } else {
         // key is the workspace and value is array of monitors to create on
         for (const Json::Value& monitor : value) {
-          if (monitor.isString() && monitor.asString() == currentMonitor) {
-            persistentWorkspacesToCreate.emplace_back(currentMonitor);
-            break;
+          if (!monitor.isString()) {
+            continue;
+          }
+
+          const auto monitorName = monitor.asString();
+          const auto targetOutput = selectHyprspacesWorkspaceNamePersistentPlaceholderOutput(
+              monitorName, currentMonitor, allOutputs());
+          if (targetOutput.has_value()) {
+            persistentWorkspacesToCreate.push_back({key, *targetOutput});
           }
         }
       }
-    } else {
+    } else if (shouldCreateHyprspacesPersistentWorkspaceFallback(keyIsMonitor, keyIsWildcard)) {
       // this workspace should be displayed on all monitors
-      persistentWorkspacesToCreate.emplace_back(key);
+      persistentWorkspacesToCreate.push_back({key, currentMonitor});
     }
   }
 
   for (auto const& workspace : persistentWorkspacesToCreate) {
-    auto workspaceData = createMonitorWorkspaceData(workspace, m_bar.output->name);
+    auto workspaceData = createMonitorWorkspaceData(workspace.name, workspace.output);
     workspaceData["persistent-config"] = true;
+    const auto workspaceKey =
+        getHyprspacesWorkspaceKey(workspaceData["id"].asInt(), workspaceData["monitor"].asString());
+    if (workspaceKey.has_value()) {
+      workspaceData[HYPRSPACES_PERSISTENT_ALIAS_PLACEHOLDER_KEY] = true;
+      rememberHyprspacesPersistentAlias(workspaceData);
+    }
     m_workspacesToCreate.emplace_back(workspaceData, clientsJson);
   }
 }
@@ -324,8 +787,16 @@ void Workspaces::loadPersistentWorkspacesFromWorkspaceRules(const Json::Value& c
     // 3. no monitor is specified in the rule => assume it needs to be persistent on every monitor
     if (allOutputs() || m_bar.output->name == monitor || monitor.empty()) {
       // => persistent workspace should be shown on this monitor
-      auto workspaceData = createMonitorWorkspaceData(workspace, m_bar.output->name);
+      const auto targetMonitor = selectHyprspacesPersistentPlaceholderOutput(
+          m_bar.output->name, monitor, allOutputs());
+      auto workspaceData = createMonitorWorkspaceData(workspace, targetMonitor);
       workspaceData["persistent-rule"] = true;
+      const auto workspaceKey = getHyprspacesWorkspaceKey(workspaceData["id"].asInt(),
+                                                          workspaceData["monitor"].asString());
+      if (workspaceKey.has_value()) {
+        workspaceData[HYPRSPACES_PERSISTENT_ALIAS_PLACEHOLDER_KEY] = true;
+        rememberHyprspacesPersistentAlias(workspaceData);
+      }
       m_workspacesToCreate.emplace_back(workspaceData, clientsJson);
     } else {
       // This can be any workspace selector.
@@ -416,9 +887,7 @@ void Workspaces::onWorkspaceCreated(std::string const& payload, Json::Value cons
         break;
       }
 
-      if ((allOutputs() || m_bar.output->name == workspaceJson["monitor"].asString()) &&
-          (showSpecialWorkspaceEntries() || !workspaceName.starts_with("special")) &&
-          !isDoubleSpecial(workspaceName)) {
+      if (shouldDisplayWorkspaceData(workspaceJson)) {
         for (Json::Value const& rule : workspaceRules) {
           auto ruleWorkspaceName = rule.isMember("defaultName")
                                        ? rule["defaultName"].asString()
@@ -444,11 +913,52 @@ void Workspaces::onWorkspaceMoved(std::string const& payload) {
   // Update active workspace
   m_activeWorkspaceId = (m_ipc.getSocket1JsonReply("activeworkspace"))["id"].asInt();
 
-  if (allOutputs()) return;
-
   const auto [workspaceIdStr, workspaceName, monitorName] = splitTriplePayload(payload);
-
   const auto subPayload = makePayload(workspaceIdStr, workspaceName);
+
+  if (allOutputs()) {
+    const auto workspaceId = parseWorkspaceId(workspaceIdStr);
+    auto workspace = m_workspaces.end();
+    if (workspaceId.has_value()) {
+      workspace = std::ranges::find_if(m_workspaces, [&](std::unique_ptr<Workspace>& x) {
+        return *workspaceId == x->id() && !isHyprspacesPersistentAliasPlaceholder(*x);
+      });
+    } else {
+      workspace = std::ranges::find_if(m_workspaces, [&](std::unique_ptr<Workspace>& x) {
+        return workspaceName == x->name() && !isHyprspacesPersistentAliasPlaceholder(*x);
+      });
+    }
+
+    if (workspace == m_workspaces.end()) {
+      workspace = std::ranges::find_if(m_workspaces, [&](std::unique_ptr<Workspace>& x) {
+        if (workspaceId.has_value()) {
+          return *workspaceId == x->id();
+        }
+        return workspaceName == x->name();
+      });
+    }
+
+    if (workspace == m_workspaces.end()) {
+      return;
+    }
+
+    const auto oldHyprspacesWorkspaceKey =
+        getHyprspacesWorkspaceKey((*workspace)->id(), (*workspace)->output());
+    (*workspace)->setOutput(monitorName);
+    const auto newHyprspacesWorkspaceKey =
+        getHyprspacesWorkspaceKey((*workspace)->id(), (*workspace)->output());
+
+    if (oldHyprspacesWorkspaceKey.has_value() &&
+        oldHyprspacesWorkspaceKey != newHyprspacesWorkspaceKey) {
+      reconcileHyprspacesWorkspaceKey(*oldHyprspacesWorkspaceKey);
+    }
+    if (newHyprspacesWorkspaceKey.has_value() &&
+        oldHyprspacesWorkspaceKey != newHyprspacesWorkspaceKey) {
+      reconcileHyprspacesWorkspaceKey(*newHyprspacesWorkspaceKey);
+    }
+
+    return;
+  }
 
   if (m_bar.output->name == monitorName) {
     Json::Value clientsData = m_ipc.getSocket1JsonReply("clients");
@@ -875,19 +1385,33 @@ void Workspaces::removeWorkspace(std::string const& workspaceString) {
     name = workspaceString;
   }
 
-  const auto workspace = std::ranges::find_if(m_workspaces, [&](std::unique_ptr<Workspace>& x) {
-    if (workspaceId.has_value()) {
-      return *workspaceId == x->id();
+  auto workspace = m_workspaces.end();
+  if (workspaceId.has_value()) {
+    if (m_hyprspacesPairedOffset > 0) {
+      workspace = std::ranges::find_if(m_workspaces, [&](std::unique_ptr<Workspace>& x) {
+        return *workspaceId == x->id() && !isHyprspacesPersistentAliasPlaceholder(*x);
+      });
     }
-    return name == x->name();
-  });
+    if (workspace == m_workspaces.end()) {
+      workspace = std::ranges::find_if(m_workspaces, [&](std::unique_ptr<Workspace>& x) {
+        return *workspaceId == x->id();
+      });
+    }
+  } else {
+    workspace = std::ranges::find_if(m_workspaces, [&](std::unique_ptr<Workspace>& x) {
+      return name == x->name();
+    });
+  }
 
   if (workspace == m_workspaces.end()) {
     // happens when a workspace on another monitor is destroyed
     return;
   }
 
-  if ((*workspace)->isPersistentConfig()) {
+  const auto hyprspacesWorkspaceKey =
+      getHyprspacesWorkspaceKey((*workspace)->id(), (*workspace)->output());
+
+  if ((*workspace)->isPersistentConfig() && !hyprspacesWorkspaceKey.has_value()) {
     spdlog::trace("Not removing config persistent workspace id={} name={}", (*workspace)->id(),
                   (*workspace)->name());
     return;
@@ -895,6 +1419,10 @@ void Workspaces::removeWorkspace(std::string const& workspaceString) {
 
   m_box.remove(workspace->get()->button());
   m_workspaces.erase(workspace);
+
+  if (hyprspacesWorkspaceKey.has_value()) {
+    reconcileHyprspacesWorkspaceKey(*hyprspacesWorkspaceKey);
+  }
 }
 
 void Workspaces::setCurrentMonitorId() {
@@ -1015,17 +1543,16 @@ void Workspaces::sortWorkspaces() {
 
 void Workspaces::setUrgentWorkspace(std::string const& windowaddress) {
   const Json::Value clientsJson = m_ipc.getSocket1JsonReply("clients");
-  int workspaceId = -1;
+  auto client = std::ranges::find_if(clientsJson, [&](Json::Value const& clientJson) {
+    return clientJson["address"].asString().ends_with(windowaddress);
+  });
 
-  for (Json::Value clientJson : clientsJson) {
-    if (clientJson["address"].asString().ends_with(windowaddress)) {
-      workspaceId = clientJson["workspace"]["id"].asInt();
-      break;
-    }
+  if (client == clientsJson.end()) {
+    return;
   }
 
-  auto workspace = std::ranges::find_if(m_workspaces, [workspaceId](std::unique_ptr<Workspace>& x) {
-    return x->id() == workspaceId;
+  auto workspace = std::ranges::find_if(m_workspaces, [&](std::unique_ptr<Workspace>& x) {
+    return isWindowInWorkspace(*x, *client);
   });
   if (workspace != m_workspaces.end()) {
     workspace->get()->setUrgent();
@@ -1041,8 +1568,7 @@ void Workspaces::updateWindowCount() {
   const Json::Value workspacesJson = m_ipc.getSocket1JsonReply("workspaces");
   for (auto const& workspace : m_workspaces) {
     auto workspaceJson = std::ranges::find_if(workspacesJson, [&](Json::Value const& x) {
-      return x["name"].asString() == workspace->name() ||
-             (workspace->isSpecial() && x["name"].asString() == "special:" + workspace->name());
+      return isWorkspaceJsonMatch(*workspace, x);
     });
     uint32_t count = 0;
     if (workspaceJson != workspacesJson.end()) {
@@ -1091,6 +1617,7 @@ void Workspaces::updateWorkspaceStates() {
   std::string activeWorkspaceName =
       currentWorkspace.isMember("name") ? currentWorkspace["name"].asString() : "";
   std::string activeSpecialWorkspaceName = m_activeSpecialWorkspaceName;
+  std::string activeWorkspaceOutput;
 
   if (m_activePerMonitor) {
     auto monitors = m_ipc.getSocket1JsonReply("monitors");
@@ -1106,6 +1633,7 @@ void Workspaces::updateWorkspaceStates() {
       if (monitorActiveWorkspace.isObject() && monitorActiveWorkspace["name"].isString()) {
         activeWorkspaceName = monitorActiveWorkspace["name"].asString();
       }
+      activeWorkspaceOutput = m_bar.output->name;
 
       const auto monitorSpecialWorkspace = (*monitor)["specialWorkspace"];
       if (monitorSpecialWorkspace.isObject() && monitorSpecialWorkspace["name"].isString()) {
@@ -1120,15 +1648,25 @@ void Workspaces::updateWorkspaceStates() {
   const bool monitorHasSpecialWorkspace = !activeSpecialWorkspaceName.empty();
 
   const bool hyprspacesPairingEnabled = m_hyprspacesPairedOffset > 0;
-  auto normalizeHyprspacesWorkspaceId = [this](int workspaceId) {
-    if (workspaceId <= 0 || m_hyprspacesPairedOffset <= 0) {
-      return workspaceId;
-    }
-    return ((workspaceId - 1) % m_hyprspacesPairedOffset) + 1;
-  };
-
-  std::unordered_set<int> hyprspacesOccupied;
+  std::unordered_set<std::string> hyprspacesOccupied;
+  std::unordered_set<std::string> hyprspacesVisible;
+  std::unordered_set<int> hyprspacesOccupiedRawIds;
   if (hyprspacesPairingEnabled) {
+    if (activeWorkspaceOutput.empty()) {
+      auto activeWorkspace = std::ranges::find_if(updatedWorkspaces, [&](const auto& workspace) {
+        if (!workspace["id"].isInt()) {
+          return false;
+        }
+        const bool idMatches = workspace["id"].asInt() == activeWorkspaceId;
+        const bool nameMatches = !activeWorkspaceName.empty() &&
+                                 workspace["name"].asString() == activeWorkspaceName;
+        return idMatches || nameMatches;
+      });
+      if (activeWorkspace != updatedWorkspaces.end()) {
+        activeWorkspaceOutput = (*activeWorkspace)["monitor"].asString();
+      }
+    }
+
     for (const auto &workspace : updatedWorkspaces) {
       if (!workspace["id"].isInt() || !workspace["windows"].isInt()) {
         continue;
@@ -1140,47 +1678,112 @@ void Workspaces::updateWorkspaceStates() {
         continue;
       }
 
-      hyprspacesOccupied.insert(normalizeHyprspacesWorkspaceId(workspaceId));
+      hyprspacesOccupiedRawIds.insert(workspaceId);
+
+      auto key = getHyprspacesWorkspaceKey(workspaceId, workspace["monitor"].asString());
+      if (key.has_value()) {
+        hyprspacesOccupied.insert(*key);
+      }
+    }
+
+    auto monitors = m_ipc.getSocket1JsonReply("monitors");
+    for (const auto &monitor : monitors) {
+      const auto monitorName = monitor["name"].asString();
+      const auto activeWorkspace = monitor["activeWorkspace"];
+      if (activeWorkspace.isObject() && activeWorkspace["id"].isInt()) {
+        auto key = getHyprspacesWorkspaceKey(activeWorkspace["id"].asInt(), monitorName);
+        if (key.has_value()) {
+          hyprspacesVisible.insert(*key);
+        }
+      }
     }
   }
 
+  std::unordered_set<std::string> hyprspacesKeysToReconcile;
   for (auto& workspace : m_workspaces) {
-    bool isActiveByName =
-        !activeWorkspaceName.empty() && workspace->name() == activeWorkspaceName;
+    if (isHyprspacesPersistentAliasPlaceholder(*workspace)) {
+      continue;
+    }
 
-    const bool isSpecialWorkspaceActive =
-        workspace->isSpecial() && workspace->name() == activeSpecialWorkspaceName;
-    const bool isWorkspaceActive =
-        workspace->id() == activeWorkspaceId || isActiveByName || isSpecialWorkspaceActive;
+    auto updatedWorkspace = std::ranges::find_if(updatedWorkspaces, [&](const auto& w) {
+      return isWorkspaceJsonSameRealWorkspace(*workspace, w);
+    });
+    if (updatedWorkspace == updatedWorkspaces.end()) {
+      continue;
+    }
+
+    const auto oldWorkspaceKey = getHyprspacesWorkspaceKey(workspace->id(), workspace->output());
+    workspace->setOutput((*updatedWorkspace)["monitor"].asString());
+    const auto newWorkspaceKey = getHyprspacesWorkspaceKey(workspace->id(), workspace->output());
+    if (oldWorkspaceKey == newWorkspaceKey) {
+      continue;
+    }
+    if (oldWorkspaceKey.has_value()) {
+      hyprspacesKeysToReconcile.insert(*oldWorkspaceKey);
+    }
+    if (newWorkspaceKey.has_value()) {
+      hyprspacesKeysToReconcile.insert(*newWorkspaceKey);
+    }
+  }
+
+  for (const auto& key : hyprspacesKeysToReconcile) {
+    reconcileHyprspacesWorkspaceKey(key);
+  }
+
+  for (auto& workspace : m_workspaces) {
+    const auto workspaceKey = getHyprspacesWorkspaceKey(workspace->id(), workspace->output());
+    const bool isHyprspacesPlaceholder =
+        workspaceKey.has_value() && isHyprspacesPersistentAliasPlaceholder(*workspace);
+    const bool useHyprspacesKeyForState = shouldUseHyprspacesKeyForState(*workspace);
+    const auto activeWorkspaceKey =
+        getHyprspacesWorkspaceKey(activeWorkspaceId, activeWorkspaceOutput);
+    const bool isActiveByHyprspacesSlot =
+        useHyprspacesKeyForState && activeWorkspaceKey.has_value() &&
+        workspaceKey == activeWorkspaceKey;
+    const bool isActiveByName = !useHyprspacesKeyForState && !isHyprspacesPlaceholder &&
+                                !activeWorkspaceName.empty() &&
+                                workspace->name() == activeWorkspaceName;
+
+    const bool isSpecialWorkspaceActive = !useHyprspacesKeyForState && !isHyprspacesPlaceholder &&
+                                          workspace->isSpecial() &&
+                                          workspace->name() == activeSpecialWorkspaceName;
+    const bool isActiveByRawId = !isHyprspacesPlaceholder && workspace->id() == activeWorkspaceId;
+    const bool isWorkspaceActive = useHyprspacesKeyForState
+                                       ? isActiveByHyprspacesSlot
+                                       : isActiveByRawId || isActiveByName ||
+                                             isSpecialWorkspaceActive;
 
     workspace->setActive(isWorkspaceActive);
-    workspace->setSpecialActive(
-        m_hyprspacesSpecialOverlay && monitorHasSpecialWorkspace && !workspace->isSpecial() &&
-        (workspace->id() == activeWorkspaceId || isActiveByName));
+    const bool isSpecialOverlayActive = useHyprspacesKeyForState
+                                            ? isActiveByHyprspacesSlot
+                                            : isActiveByRawId || isActiveByName;
+    workspace->setSpecialActive(m_hyprspacesSpecialOverlay && monitorHasSpecialWorkspace &&
+                                !workspace->isSpecial() && isSpecialOverlayActive);
 
     if (workspace->isActive() && workspace->isUrgent()) {
       workspace->setUrgent(false);
     }
-    workspace->setVisible(std::ranges::find(visibleWorkspaces, workspace->id()) !=
-                          visibleWorkspaces.end());
+    workspace->setVisible(!isHyprspacesPlaceholder &&
+                          (useHyprspacesKeyForState
+                               ? workspaceKey.has_value() && hyprspacesVisible.contains(*workspaceKey)
+                               : std::ranges::find(visibleWorkspaces, workspace->id()) !=
+                                     visibleWorkspaces.end()));
     std::string& workspaceIcon = m_iconsMap[""];
     if (m_withIcon) {
       workspaceIcon = workspace->selectIcon(m_iconsMap);
     }
-    auto updatedWorkspace = std::ranges::find_if(updatedWorkspaces, [&workspace](const auto& w) {
-      auto wNameRaw = w["name"].asString();
-      auto wName = wNameRaw.starts_with("special:") ? wNameRaw.substr(8) : wNameRaw;
-      return wName == workspace->name();
-    });
-    if (updatedWorkspace != updatedWorkspaces.end()) {
-      workspace->setOutput((*updatedWorkspace)["monitor"].asString());
-    }
 
     if (hyprspacesPairingEnabled && workspace->id() > 0) {
-      const int normalizedId = normalizeHyprspacesWorkspaceId(workspace->id());
+      const int normalizedId = *getHyprspacesDisplaySlot(workspace->id());
       workspace->setDisplayIdOverride(normalizedId);
       workspace->setDisplayNameOverride(std::to_string(normalizedId));
-      workspace->setEmptyOverride(hyprspacesOccupied.find(normalizedId) == hyprspacesOccupied.end());
+      workspace->setEmptyOverride(isHyprspacesPlaceholder ||
+                                  (useHyprspacesKeyForState
+                                       ? !workspaceKey.has_value() ||
+                                             hyprspacesOccupied.find(*workspaceKey) ==
+                                                 hyprspacesOccupied.end()
+                                       : hyprspacesOccupiedRawIds.find(workspace->id()) ==
+                                             hyprspacesOccupiedRawIds.end()));
     } else {
       workspace->setDisplayIdOverride(std::nullopt);
       workspace->setDisplayNameOverride(std::nullopt);

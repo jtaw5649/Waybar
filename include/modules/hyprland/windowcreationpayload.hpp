@@ -53,6 +53,9 @@ class WindowCreationPayload {
   void setActive(bool value) { m_isActive = value; }
 
   std::string getWorkspaceName() const { return m_workspaceName; }
+  std::optional<int> getWorkspaceId() const { return m_workspaceId; }
+  std::optional<std::string> getWorkspaceOutput() const { return m_workspaceOutput; }
+  std::optional<int> getMonitorId() const { return m_monitorId; }
   WindowAddress getAddress() const { return m_windowAddress; }
 
   void moveToWorkspace(std::string& new_workspace_name);
@@ -67,6 +70,9 @@ class WindowCreationPayload {
 
   WindowAddress m_windowAddress;
   std::string m_workspaceName;
+  std::optional<int> m_workspaceId;
+  std::optional<std::string> m_workspaceOutput;
+  std::optional<int> m_monitorId;
   bool m_isActive = false;
 
   int m_timeSpentUncreated = 0;

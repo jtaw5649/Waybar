@@ -1,0 +1,180 @@
+#if __has_include(<catch2/catch_test_macros.hpp>)
+#include <catch2/catch_test_macros.hpp>
+#else
+#include <catch2/catch.hpp>
+#endif
+
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "modules/hyprland/hyprspaces.hpp"
+
+namespace hyprland = waybar::modules::hyprland;
+
+namespace {
+
+hyprland::HyprspacesQueuedWorkspace queuedWorkspace(
+    int id, std::string name, std::string output, int windows = 0,
+    bool persistentConfig = false, bool persistentRule = false, bool aliasPlaceholder = false,
+    bool displayable = true) {
+  return {id, std::move(name), std::move(output), windows, persistentConfig,
+          persistentRule, aliasPlaceholder, displayable};
+}
+
+}  // namespace
+
+TEST_CASE("Hyprspaces raw workspace identity requires same id name and output",
+          "[hyprland][hyprspaces]") {
+  CHECK(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 1, "1", "DP-1"));
+  CHECK_FALSE(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 11, "11",
+                                                             "DP-1"));
+  CHECK_FALSE(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 1, "1",
+                                                             "DP-2"));
+  CHECK_FALSE(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 1, "dev",
+                                                               "DP-1"));
+}
+
+TEST_CASE("Hyprspaces snapshot identity follows moved real workspaces",
+          "[hyprland][hyprspaces]") {
+  CHECK(hyprland::isSameHyprspacesSnapshotWorkspace(1, "1", 1, "1"));
+  CHECK(hyprland::isSameHyprspacesSnapshotWorkspace(-99, "special:magic", -99, "magic"));
+  CHECK_FALSE(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 1, "1",
+                                                             "DP-2"));
+  CHECK_FALSE(hyprland::isSameHyprspacesSnapshotWorkspace(1, "1", 11, "11"));
+}
+
+TEST_CASE("Hyprspaces pending creates are kept only when current or persistent",
+          "[hyprland][hyprspaces]") {
+  CHECK(hyprland::shouldKeepHyprspacesPendingCreate(false, true, true));
+  CHECK(hyprland::shouldKeepHyprspacesPendingCreate(true, false, false));
+  CHECK_FALSE(hyprland::shouldKeepHyprspacesPendingCreate(false, false, false));
+  CHECK_FALSE(hyprland::shouldKeepHyprspacesPendingCreate(false, true, false));
+  CHECK_FALSE(hyprland::shouldKeepHyprspacesPendingCreate(true, true, false));
+}
+
+TEST_CASE("Hyprspaces coalescing applies queued workspace lifecycle",
+          "[hyprland][hyprspaces]") {
+  const std::vector<std::string> removes{"1", "1", "2"};
+  const std::vector<hyprland::HyprspacesQueuedWorkspace> creates{
+      queuedWorkspace(1, "1", "DP-1"),
+      queuedWorkspace(2, "2", "DP-1"),
+      queuedWorkspace(11, "11", "DP-1", 0, true, false, true),
+  };
+  const std::vector<hyprland::HyprspacesQueuedWorkspace> snapshot{
+      queuedWorkspace(1, "1", "DP-2", 0, false, false, false, false),
+      queuedWorkspace(2, "dev", "HDMI-A-1", 3),
+  };
+
+  const auto result = hyprland::coalesceHyprspacesWorkspaceEvents(removes, creates, snapshot, 10);
+
+  REQUIRE(result.removes.size() == 2);
+  CHECK(result.removes[0] == "1");
+  CHECK(result.removes[1] == "2");
+
+  REQUIRE(result.creates.size() == 2);
+  CHECK(result.creates[0].queuedIndex == 1);
+  CHECK(result.creates[0].refreshedFromSnapshot);
+  CHECK(result.creates[0].workspace.id == 2);
+  CHECK(result.creates[0].workspace.name == "dev");
+  CHECK(result.creates[0].workspace.output == "HDMI-A-1");
+  CHECK(result.creates[0].workspace.windows == 3);
+
+  CHECK(result.creates[1].queuedIndex == 2);
+  CHECK_FALSE(result.creates[1].refreshedFromSnapshot);
+  CHECK(result.creates[1].workspace.id == 11);
+  CHECK(result.creates[1].workspace.output == "DP-1");
+  CHECK(result.creates[1].workspace.aliasPlaceholder);
+}
+
+TEST_CASE("Hyprspaces coalescing keeps duplicate real slot owners separate",
+          "[hyprland][hyprspaces]") {
+  const std::vector<hyprland::HyprspacesQueuedWorkspace> creates{
+      queuedWorkspace(1, "1", "DP-1"),
+      queuedWorkspace(11, "11", "DP-1"),
+  };
+  const std::vector<hyprland::HyprspacesQueuedWorkspace> snapshot{
+      queuedWorkspace(1, "1", "DP-1"),
+      queuedWorkspace(11, "11", "DP-1"),
+  };
+
+  const auto result = hyprland::coalesceHyprspacesWorkspaceEvents({}, creates, snapshot, 10);
+
+  REQUIRE(result.creates.size() == 2);
+  CHECK(result.creates[0].workspace.id == 1);
+  CHECK(result.creates[1].workspace.id == 11);
+  CHECK(hyprland::makeHyprspacesWorkspaceKeyForOffset(1, "DP-1", 10) ==
+        hyprland::makeHyprspacesWorkspaceKeyForOffset(11, "DP-1", 10));
+}
+
+TEST_CASE("Hyprspaces persistent ids follow refreshed monitor ids",
+          "[hyprland][hyprspaces]") {
+  const auto oldMonitorWorkspaceId = hyprland::getHyprspacesPersistentWorkspaceId(0, 3, 10, 0);
+  const auto newMonitorWorkspaceId = hyprland::getHyprspacesPersistentWorkspaceId(2, 3, 10, 0);
+
+  CHECK(oldMonitorWorkspaceId != newMonitorWorkspaceId);
+  CHECK(hyprland::getHyprspacesDisplaySlotForOffset(oldMonitorWorkspaceId, 10) == 1);
+  CHECK(hyprland::getHyprspacesDisplaySlotForOffset(newMonitorWorkspaceId, 10) == 1);
+}
+
+TEST_CASE("Hyprspaces persistent fallback skips monitor and wildcard keys",
+          "[hyprland][hyprspaces]") {
+  CHECK(hyprland::shouldCreateHyprspacesPersistentWorkspaceFallback(false, false));
+  CHECK_FALSE(hyprland::shouldCreateHyprspacesPersistentWorkspaceFallback(true, false));
+  CHECK_FALSE(hyprland::shouldCreateHyprspacesPersistentWorkspaceFallback(false, true));
+}
+
+TEST_CASE("Hyprspaces persistent placeholders use configured all outputs target",
+          "[hyprland][hyprspaces]") {
+  const auto output = hyprland::selectHyprspacesPersistentPlaceholderOutput(
+      "DP-1", "HDMI-A-1", true);
+  const auto id = hyprland::getHyprspacesPersistentWorkspaceId(1, 3, 10, 0);
+
+  CHECK(output == "HDMI-A-1");
+  CHECK(id == 11);
+  CHECK(hyprland::makeHyprspacesWorkspaceKeyForOffset(id, output, 10) == "HDMI-A-1:1");
+}
+
+TEST_CASE("Hyprspaces persistent placeholders keep bar output without explicit all outputs target",
+          "[hyprland][hyprspaces]") {
+  const auto output = hyprland::selectHyprspacesPersistentPlaceholderOutput("DP-1", "", true);
+  const auto id = hyprland::getHyprspacesPersistentWorkspaceId(0, 5, 10, 0);
+
+  CHECK(hyprland::selectHyprspacesPersistentPlaceholderOutput("DP-1", "HDMI-A-1", false) ==
+        "DP-1");
+  CHECK(output == "DP-1");
+  CHECK(id == 1);
+  CHECK(hyprland::makeHyprspacesWorkspaceKeyForOffset(id, output, 10) == "DP-1:1");
+}
+
+TEST_CASE("Hyprspaces workspace-name persistent placeholders target configured monitors",
+          "[hyprland][hyprspaces]") {
+  const auto allOutputsTarget = hyprland::selectHyprspacesWorkspaceNamePersistentPlaceholderOutput(
+      "HDMI-A-1", "DP-1", true);
+  const auto currentOutputTarget = hyprland::selectHyprspacesWorkspaceNamePersistentPlaceholderOutput(
+      "HDMI-A-1", "HDMI-A-1", false);
+  const auto otherOutputTarget = hyprland::selectHyprspacesWorkspaceNamePersistentPlaceholderOutput(
+      "HDMI-A-1", "DP-1", false);
+
+  REQUIRE(allOutputsTarget.has_value());
+  REQUIRE(currentOutputTarget.has_value());
+  CHECK(*allOutputsTarget == "HDMI-A-1");
+  CHECK(*currentOutputTarget == "HDMI-A-1");
+  CHECK_FALSE(otherOutputTarget.has_value());
+  CHECK(hyprland::makeHyprspacesWorkspaceKeyForOffset(11, *allOutputsTarget, 10) ==
+        "HDMI-A-1:1");
+}
+
+TEST_CASE("Hyprspaces workspace-rule placeholders select configured or bar output",
+          "[hyprland][hyprspaces]") {
+  const auto configuredRuleOutput = hyprland::selectHyprspacesPersistentPlaceholderOutput(
+      "DP-1", "HDMI-A-1", true);
+  const auto emptyRuleOutput = hyprland::selectHyprspacesPersistentPlaceholderOutput(
+      "DP-1", "", true);
+
+  CHECK(configuredRuleOutput == "HDMI-A-1");
+  CHECK(emptyRuleOutput == "DP-1");
+  CHECK(hyprland::makeHyprspacesWorkspaceKeyForOffset(11, configuredRuleOutput, 10) ==
+        "HDMI-A-1:1");
+  CHECK(hyprland::makeHyprspacesWorkspaceKeyForOffset(11, emptyRuleOutput, 10) == "DP-1:1");
+}

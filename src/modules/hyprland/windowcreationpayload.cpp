@@ -15,6 +15,16 @@ WindowCreationPayload::WindowCreationPayload(Json::Value const& client_data)
     : m_window(std::make_pair(client_data["class"].asString(), client_data["title"].asString())),
       m_windowAddress(client_data["address"].asString()),
       m_workspaceName(client_data["workspace"]["name"].asString()) {
+  if (client_data["workspace"].isObject() && client_data["workspace"]["id"].isInt()) {
+    m_workspaceId = client_data["workspace"]["id"].asInt();
+  }
+  if (client_data["workspace"].isObject() && client_data["workspace"]["monitor"].isString()) {
+    m_workspaceOutput = client_data["workspace"]["monitor"].asString();
+  } else if (client_data["monitor"].isString()) {
+    m_workspaceOutput = client_data["monitor"].asString();
+  } else if (client_data["monitor"].isInt()) {
+    m_monitorId = client_data["monitor"].asInt();
+  }
   clearAddr();
   clearWorkspaceName();
 }
@@ -91,6 +101,9 @@ int WindowCreationPayload::incrementTimeSpentUncreated() { return m_timeSpentUnc
 
 void WindowCreationPayload::moveToWorkspace(std::string& new_workspace_name) {
   m_workspaceName = new_workspace_name;
+  m_workspaceId.reset();
+  m_workspaceOutput.reset();
+  m_monitorId.reset();
 }
 
 WindowRepr WindowCreationPayload::repr(Workspaces& workspace_manager) {

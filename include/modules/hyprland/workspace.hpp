@@ -26,11 +26,13 @@ using WindowAddress = std::string;
 
 namespace waybar::modules::hyprland {
 
+inline constexpr char HYPRSPACES_PERSISTENT_ALIAS_PLACEHOLDER_KEY[] =
+    "_hyprspaces-persistent-alias-placeholder";
+
 class Workspaces;
 class Workspace {
  public:
-  explicit Workspace(const Json::Value& workspace_data, Workspaces& workspace_manager,
-                     const Json::Value& clients_data = Json::Value::nullRef);
+  explicit Workspace(const Json::Value& workspace_data, Workspaces& workspace_manager);
   std::string& selectIcon(std::map<std::string, std::string>& icons_map);
   Gtk::Button& button() { return m_button; };
 
@@ -45,6 +47,9 @@ class Workspace {
   bool isPersistent() const { return m_isPersistentRule || m_isPersistentConfig; };
   bool isPersistentConfig() const { return m_isPersistentConfig; };
   bool isPersistentRule() const { return m_isPersistentRule; };
+  bool isHyprspacesPersistentAliasPlaceholder() const {
+    return m_isHyprspacesPersistentAliasPlaceholder;
+  };
   bool isVisible() const { return m_isVisible; };
   bool isUrgent() const { return m_isUrgent; };
 
@@ -87,6 +92,7 @@ class Workspace {
   bool m_isSpecial = false;
   bool m_isPersistentRule = false;    // represents the persistent state in hyprland
   bool m_isPersistentConfig = false;  // represents the persistent state in the Waybar config
+  bool m_isHyprspacesPersistentAliasPlaceholder = false;
   bool m_isUrgent = false;
   bool m_isVisible = false;
   bool m_isSpecialActive = false;

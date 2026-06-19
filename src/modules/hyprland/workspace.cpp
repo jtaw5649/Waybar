@@ -11,8 +11,7 @@
 
 namespace waybar::modules::hyprland {
 
-Workspace::Workspace(const Json::Value& workspace_data, Workspaces& workspace_manager,
-                     const Json::Value& clients_data)
+Workspace::Workspace(const Json::Value& workspace_data, Workspaces& workspace_manager)
     : m_workspaceManager(workspace_manager),
       m_id(workspace_data["id"].asInt()),
       m_name(workspace_data["name"].asString()),
@@ -21,6 +20,8 @@ Workspace::Workspace(const Json::Value& workspace_data, Workspaces& workspace_ma
       m_isActive(true),
       m_isPersistentRule(workspace_data["persistent-rule"].asBool()),
       m_isPersistentConfig(workspace_data["persistent-config"].asBool()),
+      m_isHyprspacesPersistentAliasPlaceholder(
+          workspace_data[HYPRSPACES_PERSISTENT_ALIAS_PLACEHOLDER_KEY].asBool()),
       m_ipc(IPC::inst()) {
   if (m_name.starts_with("name:")) {
     m_name = m_name.substr(5);
@@ -41,8 +42,6 @@ Workspace::Workspace(const Json::Value& workspace_data, Workspaces& workspace_ma
     m_content.set_center_widget(m_labelBefore);
   }
   m_button.add(m_content);
-
-  initializeWindowMap(clients_data);
 }
 
 void addOrRemoveClass(const Glib::RefPtr<Gtk::StyleContext>& context, bool condition,
@@ -97,7 +96,7 @@ bool Workspace::handleClicked(GdkEventButton* bt) const {
 void Workspace::initializeWindowMap(const Json::Value& clients_data) {
   m_windowMap.clear();
   for (auto client : clients_data) {
-    if (client["workspace"]["id"].asInt() == id()) {
+    if (m_workspaceManager.isWindowInWorkspace(*this, client)) {
       insertWindow({client});
     }
   }
@@ -145,7 +144,7 @@ void Workspace::insertWindow(WindowCreationPayload create_window_payload) {
 };
 
 bool Workspace::onWindowOpened(WindowCreationPayload const& create_window_payload) {
-  if (create_window_payload.getWorkspaceName() == name()) {
+  if (m_workspaceManager.isWindowInWorkspace(*this, create_window_payload)) {
     insertWindow(create_window_payload);
     return true;
   }
@@ -201,7 +200,7 @@ std::string& Workspace::selectIcon(std::map<std::string, std::string>& icons_map
     }
   }
 
-  if (isPersistent()) {
+  if (m_workspaceManager.isWorkspacePersistent(*this)) {
     auto persistentIconIt = icons_map.find("persistent");
     if (persistentIconIt != icons_map.end()) {
       return persistentIconIt->second;
@@ -217,14 +216,15 @@ std::string& Workspace::selectIcon(std::map<std::string, std::string>& icons_map
 }
 
 void Workspace::update(const std::string& workspace_icon) {
-  if (this->m_workspaceManager.persistentOnly() && !this->isPersistent()) {
+  const bool isPersistentWorkspace = this->m_workspaceManager.isWorkspacePersistent(*this);
+  if (this->m_workspaceManager.persistentOnly() && !isPersistentWorkspace) {
     m_button.hide();
     return;
   }
   // clang-format off
   if (this->m_workspaceManager.activeOnly() && \
      !this->isActive() && \
-     !this->isPersistent() && \
+     !isPersistentWorkspace && \
      !this->isVisible() && \
      !this->isSpecial()) {
     // clang-format on
@@ -242,7 +242,7 @@ void Workspace::update(const std::string& workspace_icon) {
   addOrRemoveClass(styleContext, isActive(), "active");
   addOrRemoveClass(styleContext, isSpecial(), "special");
   addOrRemoveClass(styleContext, isEmpty(), "empty");
-  addOrRemoveClass(styleContext, isPersistent(), "persistent");
+  addOrRemoveClass(styleContext, isPersistentWorkspace, "persistent");
   addOrRemoveClass(styleContext, isUrgent(), "urgent");
   addOrRemoveClass(styleContext, isVisible(), "visible");
   addOrRemoveClass(styleContext, isSpecialActive(), "special-active");
