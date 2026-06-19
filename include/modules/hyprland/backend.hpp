@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstdio>
 #include <filesystem>
 #include <list>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -36,6 +38,7 @@ class IPC {
 
  protected:
   static std::filesystem::path socketFolder_;
+  static std::optional<std::string> readSocket2Line(FILE* file);
 
  private:
   void socketListener();

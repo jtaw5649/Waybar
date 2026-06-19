@@ -112,23 +112,18 @@ void IPC::socketListener() {
     return;
   }
   while (running_) {
-    std::array<char, 1024> buffer;  // Hyprland socket2 events are max 1024 bytes
-
-    auto* receivedCharPtr = fgets(buffer.data(), buffer.size(), file);
-
-    if (receivedCharPtr == nullptr) {
+    auto messageReceived = readSocket2Line(file);
+    if (!messageReceived.has_value()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
       continue;
     }
 
-    std::string messageReceived(buffer.data());
-    messageReceived = messageReceived.substr(0, messageReceived.find_first_of('\n'));
-    spdlog::debug("hyprland IPC received {}", messageReceived);
+    spdlog::debug("hyprland IPC received {}", *messageReceived);
 
     try {
-      parseIPC(messageReceived);
+      parseIPC(*messageReceived);
     } catch (std::exception& e) {
-      spdlog::warn("Failed to parse IPC message: {}, reason: {}", messageReceived, e.what());
+      spdlog::warn("Failed to parse IPC message: {}, reason: {}", *messageReceived, e.what());
     } catch (...) {
       throw;
     }
@@ -136,6 +131,23 @@ void IPC::socketListener() {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   spdlog::debug("Hyprland IPC stopped");
+}
+
+std::optional<std::string> IPC::readSocket2Line(FILE* file) {
+  std::string line;
+  std::array<char, 1024> buffer;
+
+  while (fgets(buffer.data(), buffer.size(), file) != nullptr) {
+    line += buffer.data();
+
+    const auto newlinePos = line.find('\n');
+    if (newlinePos != std::string::npos) {
+      line.erase(newlinePos);
+      return line;
+    }
+  }
+
+  return std::nullopt;
 }
 
 void IPC::parseIPC(const std::string& ev) {

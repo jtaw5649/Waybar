@@ -4,10 +4,26 @@
 #include <catch2/catch.hpp>
 #endif
 
+#include <cstdio>
+#include <memory>
+
 #include "fixtures/IPCTestFixture.hpp"
 
 namespace fs = std::filesystem;
 namespace hyprland = waybar::modules::hyprland;
+
+class IPCLineReaderTestAccess : public hyprland::IPC {
+ public:
+  using hyprland::IPC::readSocket2Line;
+};
+
+struct FileCloser {
+  void operator()(FILE* file) const {
+    if (file != nullptr) {
+      std::fclose(file);
+    }
+  }
+};
 
 TEST_CASE_METHOD(IPCTestFixture, "XDGRuntimeDirExists", "[getSocketFolder]") {
   // Test case: XDG_RUNTIME_DIR exists and contains "hypr" directory
@@ -56,4 +72,21 @@ TEST_CASE_METHOD(IPCTestFixture, "getSocket1Reply throws on no socket", "[getSoc
   std::string request = "test_request";
 
   CHECK_THROWS(getSocket1Reply(request));
+}
+
+TEST_CASE("Socket2 reader returns complete long event lines", "[hyprland][socket2]") {
+  const std::string data(1024, 'x');
+  const std::string expected = "windowtitlev2>>" + data;
+  const std::string input = expected + "\n";
+
+  std::unique_ptr<FILE, FileCloser> file(std::tmpfile());
+  REQUIRE(file != nullptr);
+  REQUIRE(std::fwrite(input.data(), 1, input.size(), file.get()) == input.size());
+  std::rewind(file.get());
+
+  const auto line = IPCLineReaderTestAccess::readSocket2Line(file.get());
+
+  REQUIRE(line.has_value());
+  CHECK(*line == expected);
+  CHECK(line->find('\n') == std::string::npos);
 }
