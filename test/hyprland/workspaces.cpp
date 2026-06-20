@@ -130,6 +130,24 @@ TEST_CASE("Hyprspaces persistent ids follow refreshed monitor ids",
   CHECK(hyprland::getHyprspacesDisplaySlotForOffset(newMonitorWorkspaceId, 10) == 1);
 }
 
+TEST_CASE("Hyprspaces workspace clicks dispatch paired slot switches",
+          "[hyprland][hyprspaces]") {
+  CHECK(hyprland::makeHyprspacesWorkspaceClickDispatch(13, "13", false, false, 10) ==
+        "dispatch hyprspaces:switch 3");
+  CHECK(hyprland::makeHyprspacesWorkspaceClickDispatch(13, "13", false, true, 10) ==
+        "dispatch hyprspaces:switch 3");
+  CHECK(hyprland::makeHyprspacesWorkspaceClickDispatch(3, "3", false, false, 0) ==
+        "dispatch workspace 3");
+  CHECK(hyprland::makeHyprspacesWorkspaceClickDispatch(3, "3", false, true, 0) ==
+        "dispatch focusworkspaceoncurrentmonitor 3");
+  CHECK(hyprland::makeHyprspacesWorkspaceClickDispatch(0, "dev", false, false, 10) ==
+        "dispatch workspace name:dev");
+  CHECK(hyprland::makeHyprspacesWorkspaceClickDispatch(-98, "magic", true, false, 10) ==
+        "dispatch togglespecialworkspace magic");
+  CHECK(hyprland::makeHyprspacesWorkspaceClickDispatch(-99, "special", true, false, 10) ==
+        "dispatch togglespecialworkspace");
+}
+
 TEST_CASE("Hyprspaces persistent fallback skips monitor and wildcard keys",
           "[hyprland][hyprspaces]") {
   CHECK(hyprland::shouldCreateHyprspacesPersistentWorkspaceFallback(false, false));

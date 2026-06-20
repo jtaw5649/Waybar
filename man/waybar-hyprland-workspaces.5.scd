@@ -130,6 +130,7 @@ This setting is ignored if *workspace-taskbar.enable* is set to true.
 	If set to a value greater than 0, workspace labels are normalized with modulo arithmetic using this offset.
 	For example, with offset 10, workspace 11 is rendered as slot 1.
 	When enabled, empty/occupied state is also normalized across paired workspaces.
+	Clicking a numbered workspace dispatches `hyprspaces:switch` for the normalized slot so all paired displays switch together.
 
 *hyprspaces-special-overlay*: ++
 	typeof: bool ++
@@ -149,6 +150,7 @@ This setting is ignored if *workspace-taskbar.enable* is set to true.
 	If set to true, open the workspace on the current monitor when clicking on a workspace button.
 	Otherwise, the workspace will open on the monitor where it was previously assigned.
 	Analog to using `focusworkspaceoncurrentmonitor` dispatcher instead of `workspace` in Hyprland.
+	When *hyprspaces-paired-offset* is enabled, numbered workspace clicks dispatch `hyprspaces:switch` for the normalized slot instead; named and special workspace clicks keep the behavior above.
 
 *enable-bar-scroll*: ++
 	typeof: bool ++

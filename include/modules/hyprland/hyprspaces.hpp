@@ -59,6 +59,31 @@ inline std::optional<std::string> makeHyprspacesCanonicalSlotKeyForOffset(
   return std::string(output) + ":" + std::to_string(*displaySlot);
 }
 
+inline std::string makeHyprspacesWorkspaceClickDispatch(
+    int workspaceId, std::string_view workspaceName, bool special, bool moveToMonitor,
+    int pairedOffset) {
+  if (workspaceId > 0) {
+    const auto displaySlot = getHyprspacesDisplaySlotForOffset(workspaceId, pairedOffset);
+    if (displaySlot.has_value()) {
+      return "dispatch hyprspaces:switch " + std::to_string(*displaySlot);
+    }
+    return std::string("dispatch ") +
+           (moveToMonitor ? "focusworkspaceoncurrentmonitor " : "workspace ") +
+           std::to_string(workspaceId);
+  }
+
+  if (!special) {
+    return std::string("dispatch ") +
+           (moveToMonitor ? "focusworkspaceoncurrentmonitor name:" : "workspace name:") +
+           std::string(workspaceName);
+  }
+
+  if (workspaceId != -99) {
+    return "dispatch togglespecialworkspace " + std::string(workspaceName);
+  }
+  return "dispatch togglespecialworkspace";
+}
+
 struct HyprspacesQueuedWorkspace {
   int id = 0;
   std::string name;

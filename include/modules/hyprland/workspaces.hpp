@@ -48,6 +48,7 @@ class Workspaces : public AModule, public EventHandler {
   auto enableTaskbar() const -> bool { return m_enableTaskbar; }
   auto taskbarWithIcon() const -> bool { return m_taskbarWithIcon; }
   auto barScroll() const -> bool { return m_barScroll; }
+  auto hyprspacesPairedOffset() const -> int { return m_hyprspacesPairedOffset; }
 
   auto getBarOutput() const -> std::string { return m_bar.output->name; }
   auto formatBefore() const -> std::string { return m_formatBefore; }
