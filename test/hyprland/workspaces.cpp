@@ -174,6 +174,16 @@ TEST_CASE("Hyprspaces dynamic aliases use slot zero for single remaining monitor
   CHECK(aliases.front().output == "DP-2");
 }
 
+TEST_CASE("Hyprspaces same-output workspace ordering follows display slots",
+          "[hyprland][hyprspaces]") {
+  CHECK(hyprland::compareHyprspacesSameOutputDisplaySlot(11, "DP-1", 4, "DP-1", 10) == true);
+  CHECK(hyprland::compareHyprspacesSameOutputDisplaySlot(4, "DP-1", 11, "DP-1", 10) == false);
+  CHECK_FALSE(
+      hyprland::compareHyprspacesSameOutputDisplaySlot(11, "DP-1", 1, "DP-1", 10).has_value());
+  CHECK_FALSE(
+      hyprland::compareHyprspacesSameOutputDisplaySlot(11, "DP-1", 4, "DP-2", 10).has_value());
+}
+
 TEST_CASE("Hyprspaces dynamic aliases require valid count and offset", "[hyprland][hyprspaces]") {
   CHECK(hyprland::makeHyprspacesDynamicPersistentAliases({"DP-1"}, "DP-1", false, 10, 0).empty());
   CHECK(hyprland::makeHyprspacesDynamicPersistentAliases({"DP-1"}, "DP-1", false, 0, 5).empty());

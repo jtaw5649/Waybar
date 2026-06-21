@@ -1648,6 +1648,11 @@ void Workspaces::sortWorkspaces() {
 
             // both normal (includes numbered persistent) => sort by ID
             if (a->id() > 0 && b->id() > 0) {
+              if (const auto displaySlotOrder = compareHyprspacesSameOutputDisplaySlot(
+                      a->id(), a->output(), b->id(), b->output(), m_hyprspacesPairedOffset);
+                  displaySlotOrder.has_value()) {
+                return *displaySlotOrder;
+              }
               return isIdLess;
             }
 

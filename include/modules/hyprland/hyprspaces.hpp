@@ -61,6 +61,24 @@ inline std::optional<std::string> makeHyprspacesCanonicalSlotKeyForOffset(int wo
   return std::string(output) + ":" + std::to_string(*displaySlot);
 }
 
+inline std::optional<bool> compareHyprspacesSameOutputDisplaySlot(int leftId,
+                                                                  std::string_view leftOutput,
+                                                                  int rightId,
+                                                                  std::string_view rightOutput,
+                                                                  int pairedOffset) {
+  if (leftOutput != rightOutput) {
+    return std::nullopt;
+  }
+
+  const auto leftSlot = getHyprspacesDisplaySlotForOffset(leftId, pairedOffset);
+  const auto rightSlot = getHyprspacesDisplaySlotForOffset(rightId, pairedOffset);
+  if (!leftSlot.has_value() || !rightSlot.has_value() || leftSlot == rightSlot) {
+    return std::nullopt;
+  }
+
+  return *leftSlot < *rightSlot;
+}
+
 inline std::string makeHyprspacesWorkspaceClickDispatch(int workspaceId,
                                                         std::string_view workspaceName,
                                                         bool special, bool moveToMonitor,
