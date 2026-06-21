@@ -150,6 +150,7 @@ class Workspaces : public AModule, public EventHandler {
 
   void initializeWorkspaces();
   void setCurrentMonitorId();
+  void loadHyprspacesDynamicWorkspaces(Json::Value const& clientsJson);
   void loadPersistentWorkspacesFromConfig(Json::Value const& clientsJson);
   void loadPersistentWorkspacesFromWorkspaceRules(const Json::Value& clientsJson);
   std::optional<std::string> getHyprspacesCanonicalSlotKey(int workspaceId,
@@ -165,12 +166,10 @@ class Workspaces : public AModule, public EventHandler {
   bool hasDuplicateHyprspacesRealOwners(std::string const& key) const;
   bool shouldUseHyprspacesCanonicalSlotForState(Workspace const& workspace) const;
   bool shouldDisplayWorkspaceData(Json::Value const& workspaceData);
-  bool isWorkspaceJsonRawMatch(Workspace const& workspace,
-                               Json::Value const& workspaceData) const;
+  bool isWorkspaceJsonRawMatch(Workspace const& workspace, Json::Value const& workspaceData) const;
   bool isWorkspaceJsonSameRealWorkspace(Workspace const& workspace,
                                         Json::Value const& workspaceData) const;
-  bool isWorkspaceJsonMatch(Workspace const& workspace,
-                              Json::Value const& workspaceData) const;
+  bool isWorkspaceJsonMatch(Workspace const& workspace, Json::Value const& workspaceData) const;
   std::optional<HyprspacesPersistentAliasMetadata> readHyprspacesPersistentAliasMetadata(
       Json::Value const& workspaceData) const;
   Json::Value createHyprspacesExplicitAliasPlaceholderData(
@@ -202,21 +201,23 @@ class Workspaces : public AModule, public EventHandler {
   WorkspaceStateSources fetchWorkspaceStateSources();
   WorkspaceStateContext indexWorkspaceState(WorkspaceStateSources const& sources) const;
   void reconcileWorkspaceStateOutputs(Json::Value const& updatedWorkspaces);
-  HyprspacesWorkspaceRenderState classifyWorkspaceState(
-      Workspace const& workspace, WorkspaceStateContext const& context) const;
-  void renderWorkspaceState(Workspace& workspace,
-                            HyprspacesWorkspaceRenderState const& state);
+  HyprspacesWorkspaceRenderState classifyWorkspaceState(Workspace const& workspace,
+                                                        WorkspaceStateContext const& context) const;
+  void renderWorkspaceState(Workspace& workspace, HyprspacesWorkspaceRenderState const& state);
 
   bool m_allOutputs = false;
   bool m_showSpecial = false;
   bool m_hyprspacesSpecialOverlay = false;
+  bool m_hyprspacesDynamicWorkspaces = false;
   bool m_activeOnly = false;
   bool m_activePerMonitor = true;
   int m_hyprspacesPairedOffset = 0;
+  int m_hyprspacesWorkspaceCount = 0;
   bool m_specialVisibleOnly = false;
   bool m_persistentOnly = false;
   bool m_moveToMonitor = false;
   bool m_barScroll = false;
+  bool m_scrollConnected = false;
   Json::Value m_persistentWorkspaceConfig;
 
   // Map for windows stored in workspaces not present in the current bar.

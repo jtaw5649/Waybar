@@ -49,10 +49,11 @@ void Workspaces::init() {
 
   initializeWorkspaces();
 
-  if (barScroll()) {
+  if (barScroll() && !m_scrollConnected) {
     auto& window = const_cast<Bar&>(m_bar).window;
     window.add_events(Gdk::SCROLL_MASK | Gdk::SMOOTH_SCROLL_MASK);
     window.signal_scroll_event().connect(sigc::mem_fun(*this, &Workspaces::handleScroll));
+    m_scrollConnected = true;
   }
 
   dp.emit();
@@ -176,7 +177,7 @@ bool Workspaces::shouldDisplayWorkspaceData(Json::Value const& workspaceData) {
 }
 
 bool Workspaces::isWorkspaceJsonRawMatch(Workspace const& workspace,
-                                          Json::Value const& workspaceData) const {
+                                         Json::Value const& workspaceData) const {
   if (workspace.id() > 0 && workspaceData["id"].isInt() &&
       workspaceData["id"].asInt() == workspace.id()) {
     return true;
@@ -187,8 +188,8 @@ bool Workspaces::isWorkspaceJsonRawMatch(Workspace const& workspace,
          (workspace.isSpecial() && workspaceName == "special:" + workspace.name());
 }
 
-bool Workspaces::isWorkspaceJsonSameRealWorkspace(
-    Workspace const& workspace, Json::Value const& workspaceData) const {
+bool Workspaces::isWorkspaceJsonSameRealWorkspace(Workspace const& workspace,
+                                                  Json::Value const& workspaceData) const {
   return !isHyprspacesPersistentAliasPlaceholder(workspace) && workspaceData["id"].isInt() &&
          workspaceData["name"].isString() &&
          isSameHyprspacesSnapshotWorkspace(workspace.id(), workspace.name(),
@@ -211,9 +212,8 @@ bool Workspaces::isWorkspaceJsonMatch(Workspace const& workspace,
       return false;
     }
 
-    const auto candidateCanonicalSlotKey =
-        getHyprspacesCanonicalSlotKey(workspaceData["id"].asInt(),
-                                      workspaceData["monitor"].asString());
+    const auto candidateCanonicalSlotKey = getHyprspacesCanonicalSlotKey(
+        workspaceData["id"].asInt(), workspaceData["monitor"].asString());
     return candidateCanonicalSlotKey.has_value() &&
            candidateCanonicalSlotKey == workspaceCanonicalSlotKey;
   }
@@ -262,18 +262,17 @@ bool Workspaces::isWindowInWorkspace(Workspace const& workspace,
   return windowPayload.getWorkspaceName() == workspace.name();
 }
 
-std::optional<HyprspacesPersistentAliasMetadata>
-Workspaces::readHyprspacesPersistentAliasMetadata(Json::Value const& workspaceData) const {
+std::optional<HyprspacesPersistentAliasMetadata> Workspaces::readHyprspacesPersistentAliasMetadata(
+    Json::Value const& workspaceData) const {
   if (!workspaceData["id"].isInt() || !workspaceData["name"].isString() ||
       !workspaceData["monitor"].isString()) {
     return std::nullopt;
   }
 
-  return makeHyprspacesPersistentAliasMetadata(workspaceData["id"].asInt(),
-                                               workspaceData["name"].asString(),
-                                               workspaceData["monitor"].asString(),
-                                               workspaceData["persistent-config"].asBool(),
-                                               workspaceData["persistent-rule"].asBool());
+  return makeHyprspacesPersistentAliasMetadata(
+      workspaceData["id"].asInt(), workspaceData["name"].asString(),
+      workspaceData["monitor"].asString(), workspaceData["persistent-config"].asBool(),
+      workspaceData["persistent-rule"].asBool());
 }
 
 Json::Value Workspaces::createHyprspacesExplicitAliasPlaceholderData(
@@ -293,8 +292,7 @@ void Workspaces::rememberHyprspacesPersistentAlias(HyprspacesPersistentAliasMeta
   }
 }
 
-bool Workspaces::isHyprspacesExplicitAliasPlaceholderInput(
-    Json::Value const& workspaceData) const {
+bool Workspaces::isHyprspacesExplicitAliasPlaceholderInput(Json::Value const& workspaceData) const {
   return workspaceData[HYPRSPACES_EXPLICIT_ALIAS_PLACEHOLDER_KEY].asBool();
 }
 
@@ -303,8 +301,7 @@ bool Workspaces::isHyprspacesPersistentAliasPlaceholder(Workspace const& workspa
 }
 
 void Workspaces::reconcileHyprspacesCanonicalSlotKey(std::string const& key) {
-  if (key.empty() || m_hyprspacesPairedOffset <= 0 ||
-      m_reconcilingHyprspacesCanonicalSlotKey) {
+  if (key.empty() || m_hyprspacesPairedOffset <= 0 || m_reconcilingHyprspacesCanonicalSlotKey) {
     return;
   }
 
@@ -338,8 +335,8 @@ void Workspaces::reconcileHyprspacesCanonicalSlotKey(std::string const& key) {
       continue;
     }
 
-    const bool sameRawIdentityAlreadyKept = std::ranges::any_of(
-        keptRealWorkspaces, [&](size_t keptIndex) {
+    const bool sameRawIdentityAlreadyKept =
+        std::ranges::any_of(keptRealWorkspaces, [&](size_t keptIndex) {
           return isSameHyprspacesRawWorkspaceIdentity(
               m_workspaces[index]->id(), m_workspaces[index]->name(), m_workspaces[index]->output(),
               m_workspaces[keptIndex]->id(), m_workspaces[keptIndex]->name(),
@@ -391,8 +388,7 @@ bool Workspaces::isWorkspacePersistent(Workspace const& workspace) const {
 }
 
 Workspace* Workspaces::createWorkspace(Json::Value const& workspace_data,
-                                       Json::Value const& clients_data,
-                                       bool initializeWindowMap) {
+                                       Json::Value const& clients_data, bool initializeWindowMap) {
   auto workspaceName = workspace_data["name"].asString();
   auto workspaceId = workspace_data["id"].asInt();
   auto workspaceOutput = workspace_data["monitor"].asString();
@@ -536,15 +532,14 @@ void Workspaces::coalescePendingWorkspaceEvents() {
     workspace.windows = workspaceData["windows"].asInt();
     workspace.persistentConfig = workspaceData["persistent-config"].asBool();
     workspace.persistentRule = workspaceData["persistent-rule"].asBool();
-    workspace.aliasPlaceholder =
-        workspaceData[HYPRSPACES_EXPLICIT_ALIAS_PLACEHOLDER_KEY].asBool();
+    workspace.aliasPlaceholder = workspaceData[HYPRSPACES_EXPLICIT_ALIAS_PLACEHOLDER_KEY].asBool();
     return workspace;
   };
 
   if (m_workspacesToCreate.empty()) {
-    m_workspacesToRemove = coalesceHyprspacesWorkspaceEvents(
-        m_workspacesToRemove, {}, {}, m_hyprspacesPairedOffset)
-                               .removes;
+    m_workspacesToRemove =
+        coalesceHyprspacesWorkspaceEvents(m_workspacesToRemove, {}, {}, m_hyprspacesPairedOffset)
+            .removes;
     return;
   }
 
@@ -562,8 +557,8 @@ void Workspaces::coalescePendingWorkspaceEvents() {
     snapshot.push_back(std::move(workspace));
   }
 
-  const auto coalesced = coalesceHyprspacesWorkspaceEvents(
-      m_workspacesToRemove, queuedCreates, snapshot, m_hyprspacesPairedOffset);
+  const auto coalesced = coalesceHyprspacesWorkspaceEvents(m_workspacesToRemove, queuedCreates,
+                                                           snapshot, m_hyprspacesPairedOffset);
   m_workspacesToRemove = coalesced.removes;
 
   std::vector<std::pair<Json::Value, Json::Value>> workspaceCreates;
@@ -666,12 +661,117 @@ void Workspaces::initializeWorkspaces() {
   }
 
   spdlog::debug("Initializing persistent workspaces");
-  if (m_persistentWorkspaceConfig.isObject()) {
+  if (m_hyprspacesDynamicWorkspaces) {
+    loadHyprspacesDynamicWorkspaces(clientsJson);
+  } else if (m_persistentWorkspaceConfig.isObject()) {
     // a persistent workspace config is defined, so use that instead of workspace rules
     loadPersistentWorkspacesFromConfig(clientsJson);
   }
   // load Hyprland's workspace rules
   loadPersistentWorkspacesFromWorkspaceRules(clientsJson);
+}
+
+void Workspaces::loadHyprspacesDynamicWorkspaces(Json::Value const& clientsJson) {
+  spdlog::info("Loading hyprspaces dynamic workspaces from plugin status");
+  if (m_hyprspacesWorkspaceCount <= 0) {
+    spdlog::warn(
+        "hyprspaces-dynamic-workspaces is enabled but hyprspaces-workspace-count is not a "
+        "positive integer; no dynamic workspaces will be created");
+    return;
+  }
+  if (m_hyprspacesPairedOffset <= 0) {
+    spdlog::warn(
+        "hyprspaces-dynamic-workspaces is enabled but hyprspaces-paired-offset is not a "
+        "positive integer; no dynamic workspaces will be created");
+    return;
+  }
+  if (m_hyprspacesWorkspaceCount > m_hyprspacesPairedOffset) {
+    spdlog::warn(
+        "hyprspaces-workspace-count ({}) must not exceed hyprspaces-paired-offset ({}); no "
+        "dynamic workspaces will be created",
+        m_hyprspacesWorkspaceCount, m_hyprspacesPairedOffset);
+    return;
+  }
+
+  Json::Value status;
+  try {
+    status = m_ipc.getSocket1JsonReply("hyprspaces");
+  } catch (const std::exception& e) {
+    spdlog::warn("Failed to query hyprspaces plugin status: {}", e.what());
+    return;
+  }
+
+  if (!status.isObject()) {
+    spdlog::warn(
+        "hyprspaces plugin status is not a JSON object; no dynamic workspaces will be created");
+    return;
+  }
+  if (!status["topologyValid"].isBool() || !status["topologyValid"].asBool()) {
+    const auto topologyError = status["topologyError"].isString()
+                                   ? status["topologyError"].asString()
+                                   : "unknown topology error";
+    spdlog::warn("hyprspaces topology is invalid: {}; no dynamic workspaces will be created",
+                 topologyError);
+    return;
+  }
+  if (!status["pairedOffset"].isInt() || status["pairedOffset"].asInt() <= 0) {
+    spdlog::warn(
+        "hyprspaces plugin status has an invalid pairedOffset; no dynamic workspaces will be "
+        "created");
+    return;
+  }
+  if (status["pairedOffset"].asInt() != m_hyprspacesPairedOffset) {
+    spdlog::warn(
+        "hyprspaces plugin pairedOffset ({}) differs from hyprspaces-paired-offset config ({}); "
+        "no dynamic workspaces will be created",
+        status["pairedOffset"].asInt(), m_hyprspacesPairedOffset);
+    return;
+  }
+
+  const auto monitors = status["monitors"];
+  if (!monitors.isArray()) {
+    spdlog::warn(
+        "hyprspaces plugin status has no monitor array; no dynamic workspaces will be created");
+    return;
+  }
+
+  std::vector<std::optional<std::string>> monitorNames;
+  monitorNames.reserve(monitors.size());
+  for (const auto& monitor : monitors) {
+    if (!monitor.isObject() || !monitor["name"].isString()) {
+      monitorNames.push_back(std::nullopt);
+      continue;
+    }
+
+    monitorNames.push_back(monitor["name"].asString());
+  }
+  const auto orderedMonitorNames = validateHyprspacesDynamicMonitorNames(monitorNames);
+  if (!orderedMonitorNames.has_value()) {
+    spdlog::warn(
+        "hyprspaces plugin status has malformed, empty, or duplicate monitor names; no dynamic "
+        "workspaces will be created");
+    return;
+  }
+  if (orderedMonitorNames->empty()) {
+    spdlog::warn(
+        "hyprspaces plugin status has no valid monitors; no dynamic workspaces will be created");
+    return;
+  }
+
+  const auto aliases =
+      makeHyprspacesDynamicPersistentAliases(*orderedMonitorNames, m_bar.output->name, allOutputs(),
+                                             m_hyprspacesPairedOffset, m_hyprspacesWorkspaceCount);
+  if (aliases.empty()) {
+    spdlog::warn("hyprspaces dynamic workspace generation produced no aliases for bar output '{}'",
+                 m_bar.output->name);
+    return;
+  }
+
+  for (const auto& alias : aliases) {
+    rememberHyprspacesPersistentAlias(alias);
+    m_workspacesToCreate.emplace_back(createHyprspacesExplicitAliasPlaceholderData(alias),
+                                      clientsJson);
+  }
 }
 
 bool isDoubleSpecial(std::string const& workspace_name) {
@@ -719,8 +819,8 @@ void Workspaces::loadPersistentWorkspacesFromConfig(Json::Value const& clientsJs
   }
   const bool monitorInConfig = std::ranges::find(keys, currentMonitor) != keys.end();
   for (const std::string& key : keys) {
-    const bool keyIsMonitor = key == currentMonitor ||
-                              (allOutputs() && allMonitorNames.contains(key));
+    const bool keyIsMonitor =
+        key == currentMonitor || (allOutputs() && allMonitorNames.contains(key));
     const bool keyIsWildcard = key == "*";
     // only add if either:
     // 1. key is the current monitor name
@@ -729,7 +829,8 @@ void Workspaces::loadPersistentWorkspacesFromConfig(Json::Value const& clientsJs
     bool canCreate = keyIsMonitor || (keyIsWildcard && !monitorInConfig);
     std::string targetMonitor = currentMonitor;
     if (keyIsMonitor) {
-      targetMonitor = selectHyprspacesPersistentPlaceholderOutput(currentMonitor, key, allOutputs());
+      targetMonitor =
+          selectHyprspacesPersistentPlaceholderOutput(currentMonitor, key, allOutputs());
     }
     const Json::Value& value = m_persistentWorkspaceConfig[key];
     spdlog::trace("Parsing persistent workspace config: {} => {}", key, value.toStyledString());
@@ -745,8 +846,8 @@ void Workspaces::loadPersistentWorkspacesFromConfig(Json::Value const& clientsJs
           monitorId = targetMonitorId->second;
         }
         for (int i = 0; i < amount; i++) {
-          const int workspaceId = getHyprspacesPersistentWorkspaceId(
-              monitorId, amount, m_hyprspacesPairedOffset, i);
+          const int workspaceId =
+              getHyprspacesPersistentWorkspaceId(monitorId, amount, m_hyprspacesPairedOffset, i);
           persistentWorkspacesToCreate.push_back({std::to_string(workspaceId), targetMonitor});
         }
       }
@@ -782,8 +883,7 @@ void Workspaces::loadPersistentWorkspacesFromConfig(Json::Value const& clientsJs
     auto workspaceData = createMonitorWorkspaceData(workspace.name, workspace.output);
     workspaceData["persistent-config"] = true;
     auto alias = readHyprspacesPersistentAliasMetadata(workspaceData);
-    if (alias.has_value() &&
-        getHyprspacesCanonicalSlotKey(alias->id, alias->output).has_value()) {
+    if (alias.has_value() && getHyprspacesCanonicalSlotKey(alias->id, alias->output).has_value()) {
       workspaceData[HYPRSPACES_EXPLICIT_ALIAS_PLACEHOLDER_KEY] = true;
       rememberHyprspacesPersistentAlias(std::move(*alias));
     }
@@ -822,8 +922,8 @@ void Workspaces::loadPersistentWorkspacesFromWorkspaceRules(const Json::Value& c
     // 3. no monitor is specified in the rule => assume it needs to be persistent on every monitor
     if (allOutputs() || m_bar.output->name == monitor || monitor.empty()) {
       // => persistent workspace should be shown on this monitor
-      const auto targetMonitor = selectHyprspacesPersistentPlaceholderOutput(
-          m_bar.output->name, monitor, allOutputs());
+      const auto targetMonitor =
+          selectHyprspacesPersistentPlaceholderOutput(m_bar.output->name, monitor, allOutputs());
       auto workspaceData = createMonitorWorkspaceData(workspace, targetMonitor);
       workspaceData["persistent-rule"] = true;
       auto alias = readHyprspacesPersistentAliasMetadata(workspaceData);
@@ -873,6 +973,13 @@ void Workspaces::onEvent(const std::string& ev) {
     onActiveWindowChanged(payload);
   } else if (eventName == "configreloaded") {
     onConfigReloaded();
+  } else if (m_hyprspacesDynamicWorkspaces && eventName == "hyprspaces" && payload == "rebalance") {
+    spdlog::info("hyprspaces topology rebalanced, reinitializing hyprland/workspaces module...");
+    init();
+  } else if (m_hyprspacesDynamicWorkspaces &&
+             (eventName == "monitoradded" || eventName == "monitorremoved")) {
+    spdlog::info("Monitor topology changed, reinitializing hyprland/workspaces module...");
+    init();
   }
 
   dp.emit();
@@ -1189,10 +1296,15 @@ auto Workspaces::parseConfig(const Json::Value& config) -> void {
   populateBoolConfig(config, "show-special", m_showSpecial);
   populateBoolConfig(config, "active-per-monitor", m_activePerMonitor);
   populateBoolConfig(config, "hyprspaces-special-overlay", m_hyprspacesSpecialOverlay);
+  populateBoolConfig(config, "hyprspaces-dynamic-workspaces", m_hyprspacesDynamicWorkspaces);
 
-  const auto &hyprspacesPairedOffset = config["hyprspaces-paired-offset"];
+  const auto& hyprspacesPairedOffset = config["hyprspaces-paired-offset"];
   if (hyprspacesPairedOffset.isInt()) {
     m_hyprspacesPairedOffset = std::max(0, hyprspacesPairedOffset.asInt());
+  }
+  const auto& hyprspacesWorkspaceCount = config["hyprspaces-workspace-count"];
+  if (hyprspacesWorkspaceCount.isInt()) {
+    m_hyprspacesWorkspaceCount = std::max(0, hyprspacesWorkspaceCount.asInt());
   }
 
   populateBoolConfig(config, "special-visible-only", m_specialVisibleOnly);
@@ -1378,6 +1490,11 @@ auto Workspaces::registerIpc() -> void {
   m_ipc.registerForIPC("movewindowv2", this);
   m_ipc.registerForIPC("urgent", this);
   m_ipc.registerForIPC("configreloaded", this);
+  if (m_hyprspacesDynamicWorkspaces) {
+    m_ipc.registerForIPC("hyprspaces", this);
+    m_ipc.registerForIPC("monitoradded", this);
+    m_ipc.registerForIPC("monitorremoved", this);
+  }
 
   if (windowRewriteConfigUsesTitle() || m_taskbarWithTitle) {
     spdlog::info(
@@ -1426,14 +1543,12 @@ void Workspaces::removeWorkspace(std::string const& workspaceString) {
       });
     }
     if (workspace == m_workspaces.end()) {
-      workspace = std::ranges::find_if(m_workspaces, [&](std::unique_ptr<Workspace>& x) {
-        return *workspaceId == x->id();
-      });
+      workspace = std::ranges::find_if(
+          m_workspaces, [&](std::unique_ptr<Workspace>& x) { return *workspaceId == x->id(); });
     }
   } else {
-    workspace = std::ranges::find_if(m_workspaces, [&](std::unique_ptr<Workspace>& x) {
-      return name == x->name();
-    });
+    workspace = std::ranges::find_if(
+        m_workspaces, [&](std::unique_ptr<Workspace>& x) { return name == x->name(); });
   }
 
   if (workspace == m_workspaces.end()) {
@@ -1600,9 +1715,8 @@ auto Workspaces::update() -> void {
 void Workspaces::updateWindowCount() {
   const Json::Value workspacesJson = m_ipc.getSocket1JsonReply("workspaces");
   for (auto const& workspace : m_workspaces) {
-    auto workspaceJson = std::ranges::find_if(workspacesJson, [&](Json::Value const& x) {
-      return isWorkspaceJsonMatch(*workspace, x);
-    });
+    auto workspaceJson = std::ranges::find_if(
+        workspacesJson, [&](Json::Value const& x) { return isWorkspaceJsonMatch(*workspace, x); });
     uint32_t count = 0;
     if (workspaceJson != workspacesJson.end()) {
       try {
@@ -1643,8 +1757,7 @@ bool Workspaces::updateWindowsToCreate() {
 
 Workspaces::WorkspaceStateSources Workspaces::fetchWorkspaceStateSources() {
   return {getVisibleWorkspaces(), m_ipc.getSocket1JsonReply("workspaces"),
-          m_ipc.getSocket1JsonReply("activeworkspace"),
-          m_ipc.getSocket1JsonReply("monitors")};
+          m_ipc.getSocket1JsonReply("activeworkspace"), m_ipc.getSocket1JsonReply("monitors")};
 }
 
 Workspaces::WorkspaceStateContext Workspaces::indexWorkspaceState(
@@ -1653,9 +1766,8 @@ Workspaces::WorkspaceStateContext Workspaces::indexWorkspaceState(
   context.visibleWorkspaceIds = sources.visibleWorkspaceIds;
   context.updatedWorkspaces = sources.workspaces;
   context.activeWorkspaceId = m_activeWorkspaceId;
-  context.activeWorkspaceName = sources.activeWorkspace.isMember("name")
-                                    ? sources.activeWorkspace["name"].asString()
-                                    : "";
+  context.activeWorkspaceName =
+      sources.activeWorkspace.isMember("name") ? sources.activeWorkspace["name"].asString() : "";
   context.activeSpecialWorkspaceName = m_activeSpecialWorkspaceName;
   context.hyprspacesPairingEnabled = m_hyprspacesPairedOffset > 0;
   context.hyprspacesIndex.visibleRawIds.insert(context.visibleWorkspaceIds.begin(),
@@ -1679,9 +1791,8 @@ Workspaces::WorkspaceStateContext Workspaces::indexWorkspaceState(
       const auto monitorSpecialWorkspace = (*monitor)["specialWorkspace"];
       if (monitorSpecialWorkspace.isObject() && monitorSpecialWorkspace["name"].isString()) {
         auto specialName = monitorSpecialWorkspace["name"].asString();
-        context.activeSpecialWorkspaceName = specialName.starts_with("special:")
-                                                 ? specialName.substr(8)
-                                                 : specialName;
+        context.activeSpecialWorkspaceName =
+            specialName.starts_with("special:") ? specialName.substr(8) : specialName;
       }
     }
   }
@@ -1714,8 +1825,7 @@ Workspaces::WorkspaceStateContext Workspaces::indexWorkspaceState(
     }
 
     snapshotWorkspaces.push_back({workspace["id"].asInt(), workspace["name"].asString(),
-                                  workspace["monitor"].asString(),
-                                  workspace["windows"].asInt()});
+                                  workspace["monitor"].asString(), workspace["windows"].asInt()});
   }
 
   std::vector<HyprspacesVisibleWorkspace> visibleCanonicalWorkspaces;
@@ -1727,9 +1837,9 @@ Workspaces::WorkspaceStateContext Workspaces::indexWorkspaceState(
     }
   }
 
-  context.hyprspacesIndex = buildHyprspacesStateIndex(
-      snapshotWorkspaces, visibleCanonicalWorkspaces, context.visibleWorkspaceIds,
-      m_hyprspacesPairedOffset);
+  context.hyprspacesIndex =
+      buildHyprspacesStateIndex(snapshotWorkspaces, visibleCanonicalWorkspaces,
+                                context.visibleWorkspaceIds, m_hyprspacesPairedOffset);
   return context;
 }
 

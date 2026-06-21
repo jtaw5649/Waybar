@@ -4,6 +4,7 @@
 #include <catch2/catch.hpp>
 #endif
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,12 +15,19 @@ namespace hyprland = waybar::modules::hyprland;
 
 namespace {
 
-hyprland::HyprspacesQueuedWorkspace queuedWorkspace(
-    int id, std::string name, std::string output, int windows = 0,
-    bool persistentConfig = false, bool persistentRule = false, bool aliasPlaceholder = false,
-    bool displayable = true) {
-  return {id, std::move(name), std::move(output), windows, persistentConfig,
-          persistentRule, aliasPlaceholder, displayable};
+hyprland::HyprspacesQueuedWorkspace queuedWorkspace(int id, std::string name, std::string output,
+                                                    int windows = 0, bool persistentConfig = false,
+                                                    bool persistentRule = false,
+                                                    bool aliasPlaceholder = false,
+                                                    bool displayable = true) {
+  return {id,
+          std::move(name),
+          std::move(output),
+          windows,
+          persistentConfig,
+          persistentRule,
+          aliasPlaceholder,
+          displayable};
 }
 
 }  // namespace
@@ -27,20 +35,15 @@ hyprland::HyprspacesQueuedWorkspace queuedWorkspace(
 TEST_CASE("Hyprspaces raw workspace identity requires same id name and output",
           "[hyprland][hyprspaces]") {
   CHECK(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 1, "1", "DP-1"));
-  CHECK_FALSE(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 11, "11",
-                                                             "DP-1"));
-  CHECK_FALSE(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 1, "1",
-                                                             "DP-2"));
-  CHECK_FALSE(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 1, "dev",
-                                                               "DP-1"));
+  CHECK_FALSE(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 11, "11", "DP-1"));
+  CHECK_FALSE(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 1, "1", "DP-2"));
+  CHECK_FALSE(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 1, "dev", "DP-1"));
 }
 
-TEST_CASE("Hyprspaces snapshot identity follows moved real workspaces",
-          "[hyprland][hyprspaces]") {
+TEST_CASE("Hyprspaces snapshot identity follows moved real workspaces", "[hyprland][hyprspaces]") {
   CHECK(hyprland::isSameHyprspacesSnapshotWorkspace(1, "1", 1, "1"));
   CHECK(hyprland::isSameHyprspacesSnapshotWorkspace(-99, "special:magic", -99, "magic"));
-  CHECK_FALSE(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 1, "1",
-                                                             "DP-2"));
+  CHECK_FALSE(hyprland::isSameHyprspacesRawWorkspaceIdentity(1, "1", "DP-1", 1, "1", "DP-2"));
   CHECK_FALSE(hyprland::isSameHyprspacesSnapshotWorkspace(1, "1", 11, "11"));
 }
 
@@ -53,8 +56,7 @@ TEST_CASE("Hyprspaces pending creates are kept only when current or persistent",
   CHECK_FALSE(hyprland::shouldKeepHyprspacesPendingCreate(true, true, false));
 }
 
-TEST_CASE("Hyprspaces coalescing applies queued workspace lifecycle",
-          "[hyprland][hyprspaces]") {
+TEST_CASE("Hyprspaces coalescing applies queued workspace lifecycle", "[hyprland][hyprspaces]") {
   const std::vector<std::string> removes{"1", "1", "2"};
   const std::vector<hyprland::HyprspacesQueuedWorkspace> creates{
       queuedWorkspace(1, "1", "DP-1"),
@@ -108,8 +110,8 @@ TEST_CASE("Hyprspaces coalescing keeps duplicate real slot owners separate",
 }
 
 TEST_CASE("Hyprspaces persistent aliases are typed metadata", "[hyprland][hyprspaces]") {
-  const auto alias = hyprland::makeHyprspacesPersistentAliasMetadata(
-      11, "11", "HDMI-A-1", true, false);
+  const auto alias =
+      hyprland::makeHyprspacesPersistentAliasMetadata(11, "11", "HDMI-A-1", true, false);
 
   CHECK(alias.id == 11);
   CHECK(alias.name == "11");
@@ -120,8 +122,88 @@ TEST_CASE("Hyprspaces persistent aliases are typed metadata", "[hyprland][hyprsp
         "HDMI-A-1:1");
 }
 
-TEST_CASE("Hyprspaces persistent ids follow refreshed monitor ids",
+TEST_CASE("Hyprspaces dynamic aliases follow plugin monitor order", "[hyprland][hyprspaces]") {
+  const auto aliases =
+      hyprland::makeHyprspacesDynamicPersistentAliases({"DP-1", "DP-2"}, "DP-1", true, 10, 5);
+
+  REQUIRE(aliases.size() == 10);
+  for (int i = 0; i < 5; ++i) {
+    CHECK(aliases[static_cast<size_t>(i)].id == i + 1);
+    CHECK(aliases[static_cast<size_t>(i)].name == std::to_string(i + 1));
+    CHECK(aliases[static_cast<size_t>(i)].output == "DP-1");
+  }
+  for (int i = 0; i < 5; ++i) {
+    const auto aliasIndex = static_cast<size_t>(i + 5);
+    CHECK(aliases[aliasIndex].id == i + 11);
+    CHECK(aliases[aliasIndex].name == std::to_string(i + 11));
+    CHECK(aliases[aliasIndex].output == "DP-2");
+  }
+}
+
+TEST_CASE("Hyprspaces dynamic aliases can target only the bar output", "[hyprland][hyprspaces]") {
+  const auto aliases =
+      hyprland::makeHyprspacesDynamicPersistentAliases({"DP-1", "DP-2"}, "DP-2", false, 10, 5);
+
+  REQUIRE(aliases.size() == 5);
+  for (int i = 0; i < 5; ++i) {
+    CHECK(aliases[static_cast<size_t>(i)].id == i + 11);
+    CHECK(aliases[static_cast<size_t>(i)].output == "DP-2");
+  }
+}
+
+TEST_CASE("Hyprspaces dynamic aliases use slot zero for single STREAM topology",
           "[hyprland][hyprspaces]") {
+  const auto aliases =
+      hyprland::makeHyprspacesDynamicPersistentAliases({"STREAM"}, "STREAM", false, 10, 5);
+
+  REQUIRE(aliases.size() == 5);
+  for (int i = 0; i < 5; ++i) {
+    CHECK(aliases[static_cast<size_t>(i)].id == i + 1);
+    CHECK(aliases[static_cast<size_t>(i)].output == "STREAM");
+  }
+}
+
+TEST_CASE("Hyprspaces dynamic aliases use slot zero for single remaining monitor",
+          "[hyprland][hyprspaces]") {
+  const auto aliases =
+      hyprland::makeHyprspacesDynamicPersistentAliases({"DP-2"}, "DP-2", false, 10, 5);
+
+  REQUIRE(aliases.size() == 5);
+  CHECK(aliases.front().id == 1);
+  CHECK(aliases.back().id == 5);
+  CHECK(aliases.front().output == "DP-2");
+}
+
+TEST_CASE("Hyprspaces dynamic aliases require valid count and offset", "[hyprland][hyprspaces]") {
+  CHECK(hyprland::makeHyprspacesDynamicPersistentAliases({"DP-1"}, "DP-1", false, 10, 0).empty());
+  CHECK(hyprland::makeHyprspacesDynamicPersistentAliases({"DP-1"}, "DP-1", false, 0, 5).empty());
+  CHECK(hyprland::makeHyprspacesDynamicPersistentAliases({"DP-1"}, "DP-1", false, 10, 11).empty());
+}
+
+TEST_CASE("Hyprspaces dynamic aliases skip missing bar output", "[hyprland][hyprspaces]") {
+  CHECK(hyprland::makeHyprspacesDynamicPersistentAliases({"DP-1", "DP-2"}, "STREAM", false, 10, 5)
+            .empty());
+}
+
+TEST_CASE("Hyprspaces dynamic monitor validation rejects missing names", "[hyprland][hyprspaces]") {
+  CHECK_FALSE(hyprland::validateHyprspacesDynamicMonitorNames(
+                  {std::nullopt, std::optional<std::string>{"DP-2"}})
+                  .has_value());
+}
+
+TEST_CASE("Hyprspaces dynamic monitor validation rejects empty names", "[hyprland][hyprspaces]") {
+  CHECK_FALSE(hyprland::validateHyprspacesDynamicMonitorNames({std::string{"DP-1"}, std::string{}})
+                  .has_value());
+}
+
+TEST_CASE("Hyprspaces dynamic monitor validation rejects duplicate names",
+          "[hyprland][hyprspaces]") {
+  CHECK_FALSE(hyprland::validateHyprspacesDynamicMonitorNames(
+                  {std::string{"DP-1"}, std::string{"DP-1"}, std::string{"DP-2"}})
+                  .has_value());
+}
+
+TEST_CASE("Hyprspaces persistent ids follow refreshed monitor ids", "[hyprland][hyprspaces]") {
   const auto oldMonitorWorkspaceId = hyprland::getHyprspacesPersistentWorkspaceId(0, 3, 10, 0);
   const auto newMonitorWorkspaceId = hyprland::getHyprspacesPersistentWorkspaceId(2, 3, 10, 0);
 
@@ -130,8 +212,7 @@ TEST_CASE("Hyprspaces persistent ids follow refreshed monitor ids",
   CHECK(hyprland::getHyprspacesDisplaySlotForOffset(newMonitorWorkspaceId, 10) == 1);
 }
 
-TEST_CASE("Hyprspaces workspace clicks dispatch paired slot switches",
-          "[hyprland][hyprspaces]") {
+TEST_CASE("Hyprspaces workspace clicks dispatch paired slot switches", "[hyprland][hyprspaces]") {
   CHECK(hyprland::makeHyprspacesWorkspaceClickDispatch(13, "13", false, false, 10) ==
         "dispatch hyprspaces:switch 3");
   CHECK(hyprland::makeHyprspacesWorkspaceClickDispatch(13, "13", false, true, 10) ==
@@ -157,8 +238,8 @@ TEST_CASE("Hyprspaces persistent fallback skips monitor and wildcard keys",
 
 TEST_CASE("Hyprspaces persistent placeholders use configured all outputs target",
           "[hyprland][hyprspaces]") {
-  const auto output = hyprland::selectHyprspacesPersistentPlaceholderOutput(
-      "DP-1", "HDMI-A-1", true);
+  const auto output =
+      hyprland::selectHyprspacesPersistentPlaceholderOutput("DP-1", "HDMI-A-1", true);
   const auto id = hyprland::getHyprspacesPersistentWorkspaceId(1, 3, 10, 0);
 
   CHECK(output == "HDMI-A-1");
@@ -171,8 +252,7 @@ TEST_CASE("Hyprspaces persistent placeholders keep bar output without explicit a
   const auto output = hyprland::selectHyprspacesPersistentPlaceholderOutput("DP-1", "", true);
   const auto id = hyprland::getHyprspacesPersistentWorkspaceId(0, 5, 10, 0);
 
-  CHECK(hyprland::selectHyprspacesPersistentPlaceholderOutput("DP-1", "HDMI-A-1", false) ==
-        "DP-1");
+  CHECK(hyprland::selectHyprspacesPersistentPlaceholderOutput("DP-1", "HDMI-A-1", false) == "DP-1");
   CHECK(output == "DP-1");
   CHECK(id == 1);
   CHECK(hyprland::makeHyprspacesCanonicalSlotKeyForOffset(id, output, 10) == "DP-1:1");
@@ -180,12 +260,13 @@ TEST_CASE("Hyprspaces persistent placeholders keep bar output without explicit a
 
 TEST_CASE("Hyprspaces workspace-name persistent placeholders target configured monitors",
           "[hyprland][hyprspaces]") {
-  const auto allOutputsTarget = hyprland::selectHyprspacesWorkspaceNamePersistentPlaceholderOutput(
-      "HDMI-A-1", "DP-1", true);
-  const auto currentOutputTarget = hyprland::selectHyprspacesWorkspaceNamePersistentPlaceholderOutput(
-      "HDMI-A-1", "HDMI-A-1", false);
-  const auto otherOutputTarget = hyprland::selectHyprspacesWorkspaceNamePersistentPlaceholderOutput(
-      "HDMI-A-1", "DP-1", false);
+  const auto allOutputsTarget =
+      hyprland::selectHyprspacesWorkspaceNamePersistentPlaceholderOutput("HDMI-A-1", "DP-1", true);
+  const auto currentOutputTarget =
+      hyprland::selectHyprspacesWorkspaceNamePersistentPlaceholderOutput("HDMI-A-1", "HDMI-A-1",
+                                                                         false);
+  const auto otherOutputTarget =
+      hyprland::selectHyprspacesWorkspaceNamePersistentPlaceholderOutput("HDMI-A-1", "DP-1", false);
 
   REQUIRE(allOutputsTarget.has_value());
   REQUIRE(currentOutputTarget.has_value());
@@ -198,10 +279,10 @@ TEST_CASE("Hyprspaces workspace-name persistent placeholders target configured m
 
 TEST_CASE("Hyprspaces workspace-rule placeholders select configured or bar output",
           "[hyprland][hyprspaces]") {
-  const auto configuredRuleOutput = hyprland::selectHyprspacesPersistentPlaceholderOutput(
-      "DP-1", "HDMI-A-1", true);
-  const auto emptyRuleOutput = hyprland::selectHyprspacesPersistentPlaceholderOutput(
-      "DP-1", "", true);
+  const auto configuredRuleOutput =
+      hyprland::selectHyprspacesPersistentPlaceholderOutput("DP-1", "HDMI-A-1", true);
+  const auto emptyRuleOutput =
+      hyprland::selectHyprspacesPersistentPlaceholderOutput("DP-1", "", true);
 
   CHECK(configuredRuleOutput == "HDMI-A-1");
   CHECK(emptyRuleOutput == "DP-1");
@@ -210,8 +291,7 @@ TEST_CASE("Hyprspaces workspace-rule placeholders select configured or bar outpu
   CHECK(hyprland::makeHyprspacesCanonicalSlotKeyForOffset(11, emptyRuleOutput, 10) == "DP-1:1");
 }
 
-TEST_CASE("Hyprspaces state index tracks raw ids and canonical slots",
-          "[hyprland][hyprspaces]") {
+TEST_CASE("Hyprspaces state index tracks raw ids and canonical slots", "[hyprland][hyprspaces]") {
   const std::vector<hyprland::HyprspacesQueuedWorkspace> snapshot{
       queuedWorkspace(1, "1", "DP-1"),
       queuedWorkspace(11, "11", "DP-1", 2),
@@ -219,8 +299,7 @@ TEST_CASE("Hyprspaces state index tracks raw ids and canonical slots",
   const std::vector<hyprland::HyprspacesVisibleWorkspace> visibleSlots{{11, "DP-1"}};
   const std::vector<int> visibleRawIds{1, 11};
 
-  const auto index = hyprland::buildHyprspacesStateIndex(snapshot, visibleSlots,
-                                                         visibleRawIds, 10);
+  const auto index = hyprland::buildHyprspacesStateIndex(snapshot, visibleSlots, visibleRawIds, 10);
 
   CHECK(index.visibleRawIds.contains(1));
   CHECK(index.visibleRawIds.contains(11));
@@ -230,8 +309,7 @@ TEST_CASE("Hyprspaces state index tracks raw ids and canonical slots",
   CHECK(index.occupiedCanonicalSlotKeys.contains("DP-1:1"));
 }
 
-TEST_CASE("Hyprspaces aliases classify as explicit empty placeholders",
-          "[hyprland][hyprspaces]") {
+TEST_CASE("Hyprspaces aliases classify as explicit empty placeholders", "[hyprland][hyprspaces]") {
   hyprland::HyprspacesStateIndex index;
   index.visibleRawIds.insert(1);
   index.visibleCanonicalSlotKeys.insert("DP-1:1");
@@ -241,8 +319,8 @@ TEST_CASE("Hyprspaces aliases classify as explicit empty placeholders",
   const hyprland::HyprspacesWorkspaceView canonicalOwner{1, "1", "DP-1", false, false, true};
   const hyprland::HyprspacesActiveContext active{11, "11", "DP-1", "", false, true};
 
-  const auto canonicalState = hyprland::classifyHyprspacesWorkspaceState(
-      canonicalOwner, active, index, 10);
+  const auto canonicalState =
+      hyprland::classifyHyprspacesWorkspaceState(canonicalOwner, active, index, 10);
   const auto state = hyprland::classifyHyprspacesWorkspaceState(placeholder, active, index, 10);
 
   CHECK(canonicalState.active);
@@ -260,8 +338,7 @@ TEST_CASE("Hyprspaces aliases classify as explicit empty placeholders",
   CHECK(*state.empty);
 }
 
-TEST_CASE("Hyprspaces duplicate real owners classify by raw identity",
-          "[hyprland][hyprspaces]") {
+TEST_CASE("Hyprspaces duplicate real owners classify by raw identity", "[hyprland][hyprspaces]") {
   hyprland::HyprspacesStateIndex index;
   index.visibleRawIds.insert(11);
   index.occupiedRawIds.insert(11);

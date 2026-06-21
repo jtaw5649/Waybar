@@ -132,6 +132,20 @@ This setting is ignored if *workspace-taskbar.enable* is set to true.
 	When enabled, empty/occupied state is also normalized across paired workspaces.
 	Clicking a numbered workspace dispatches `hyprspaces:switch` for the normalized slot so all paired displays switch together.
 
+*hyprspaces-dynamic-workspaces*: ++
+	typeof: bool ++
+	default: false ++
+	If set to true, persistent numbered hyprspaces workspace buttons are generated from the loaded hyprspaces plugin status instead of *persistent-workspaces*.
+	The plugin monitor order determines each paired monitor's raw workspace range, so topology changes such as switching between physical monitors and a Sunshine/Moonlight `STREAM` output can update without regenerating Waybar config.
+	Requires *hyprspaces-paired-offset* and *hyprspaces-workspace-count* to be positive.
+	If the plugin status is unavailable, reports an invalid topology, or the bar output is not part of the reported topology, no dynamic workspace buttons are created for that initialization.
+
+*hyprspaces-workspace-count*: ++
+	typeof: int ++
+	default: 0 ++
+	Number of numbered workspace buttons to create per hyprspaces monitor when *hyprspaces-dynamic-workspaces* is enabled.
+	The value must be greater than 0 and no greater than *hyprspaces-paired-offset*.
+
 *hyprspaces-special-overlay*: ++
 	typeof: bool ++
 	default: false ++
@@ -233,6 +247,16 @@ Additional to workspace name matching, the following *format-icons* can be set.
 		"*": [ 2,3,4,5 ], // 2-5 on every monitor
 		"HDMI-A-1": [ 1 ] // but only workspace 1 on HDMI-A-1
 	}
+}
+```
+
+```
+"hyprland/workspaces": {
+	"format": "{name}",
+	"hyprspaces-paired-offset": 10,
+	"hyprspaces-dynamic-workspaces": true,
+	"hyprspaces-workspace-count": 5,
+	"hyprspaces-special-overlay": true
 }
 ```
 
