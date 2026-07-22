@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 022
 
-readonly ASSET_NAME="waybar-hyprspaces-fork-full-x86_64.tar.zst"
+readonly ASSET_NAME="hyprspaces-waybar-full-x86_64.tar.zst"
 readonly -a REQUIRED_TREE_PATHS=(
     "usr/bin/waybar"
     "usr/lib/systemd/user/waybar.service"
@@ -26,7 +26,7 @@ usage() {
     cat <<EOF
 Usage: $(basename -- "$0") [options]
 
-Build, test and package the Hyprspaces Waybar fork.
+Build, test and package hyprspaces-waybar.
 
 Options:
   --source-dir DIR   Checked-out Waybar source (default: repository root)
@@ -102,7 +102,7 @@ validate_install_tree() {
 
     strings "$binary" >"$strings_file"
     for key in "${required_keys[@]}"; do
-        grep -Fqx -- "$key" "$strings_file" || die "binary is missing fork key: $key"
+        grep -Fqx -- "$key" "$strings_file" || die "binary is missing hyprspaces-waybar key: $key"
     done
 
     version_output=$(env \
@@ -115,8 +115,8 @@ validate_install_tree() {
     log "Waybar version: $version_output"
 
     needed_libraries=$(readelf -d "$binary" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p')
-    if grep -Eq '^lib(cava|epoxy)([.]so|$)' <<<"$needed_libraries"; then
-        die "binary has forbidden libcava or libepoxy DT_NEEDED entry"
+    if grep -Eq '^lib(cava|epoxy|gps)([.]so|$)' <<<"$needed_libraries"; then
+        die "binary has forbidden libcava, libepoxy or libgps DT_NEEDED entry"
     fi
 
     ldd_output=$(ldd "$binary" 2>&1) || die "ldd failed for installed Waybar"
@@ -236,7 +236,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-work_dir=$(mktemp -d "${TMPDIR:-/tmp}/waybar-hyprspaces-release.XXXXXX")
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/hyprspaces-waybar-release.XXXXXX")
 asset_tmp=$(mktemp "$output_dir/.${ASSET_NAME}.XXXXXX")
 
 build_dir="$work_dir/build"
@@ -257,7 +257,6 @@ meson setup "$build_dir" "$build_source_dir" \
     --prefix=/usr \
     --libdir=lib \
     --buildtype=plain \
-    --auto-features=enabled \
     --wrap-mode=nodownload \
     -Dcpp_std=c++20 \
     -Dexperimental=true \
